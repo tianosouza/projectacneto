@@ -1,0 +1,22 @@
+# fly.toml app configuration file generated for ac-neto-transportes on 2026-08-30T12:21:32-03:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'ac-neto-transportes'
+primary_region = 'gru'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[http_service]
+  internal_port = 4173
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  memory = '512mb'
+  cpus = 2
+  memory_mb = 512

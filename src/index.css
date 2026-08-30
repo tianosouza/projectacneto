@@ -1,0 +1,40 @@
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=DM+Sans:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: "DM Sans", sans-serif;
+  color: #0c1017;
+  background: #f5f7fa;
+  --brand-blue: #0e4db7;
+  --brand-dark: #0c1017;
+  --brand-yellow: #f3d32e;
+  --brand-surface: #f5f7fa;
+  --brand-border: #dfe7f3;
+  --brand-text: #0c1017;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+html {
+  scroll-behavior: smooth;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--brand-surface);
+  color: var(--brand-text);
+}
+button,
+input,
+select {
+  font: inherit;
+}
+button {
+  cursor: pointer;
+}

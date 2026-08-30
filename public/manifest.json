@@ -1,0 +1,24 @@
+{
+  "name": "A C Neto Transportes · Portal do Motorista",
+  "short_name": "AC Neto",
+  "description": "Portal do motorista para negociação de fretes em tempo real.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#071a38",
+  "theme_color": "#071a38",
+  "icons": [
+    {
+      "src": "/assets/image.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/image.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
