@@ -44,6 +44,8 @@ export function DriverPortal() {
       email: "driver.demo@acneto.com",
       vehicle_model: "Mercedes Actros",
       vehicle_year: 2024,
+      capacity: "30.000 L",
+      compartments: "5 compartimentos",
       plate: "ABC-1234",
       cnh: "12345678901",
       city: "Ribeirão Preto",
@@ -53,6 +55,8 @@ export function DriverPortal() {
       longitude: -47.8103,
       last_seen: new Date().toISOString(),
       status: "available",
+      notes: "Disponível para carregamento em Ribeirão Preto.",
+      availability_since: new Date(Date.now() - 42 * 60 * 1000).toISOString(),
       rating: 4.9,
       total_trips: 128,
       created_at: new Date().toISOString(),
@@ -74,9 +78,13 @@ export function DriverPortal() {
       is_online: newOnline,
       status: newStatus,
       last_seen: new Date().toISOString(),
+      availability_since: newOnline
+        ? new Date().toISOString()
+        : driver.availability_since,
     } as Driver;
 
     localStorage.setItem("acneto-demo-driver", JSON.stringify(updated));
+    syncOperatorDriver(updated);
     setDriver(updated);
     setToggling(false);
   };
@@ -102,6 +110,15 @@ export function DriverPortal() {
           <HomeView
             driver={driver}
             onToggle={toggleOnline}
+            onUpdate={(updates) => {
+              const updated = { ...driver, ...updates };
+              localStorage.setItem(
+                "acneto-demo-driver",
+                JSON.stringify(updated),
+              );
+              syncOperatorDriver(updated);
+              setDriver(updated);
+            }}
             toggling={toggling}
           />
         )}
@@ -113,6 +130,43 @@ export function DriverPortal() {
       <BottomNav tab={tab} setTab={setTab} />
     </div>
   );
+}
+
+function syncOperatorDriver(driver: Driver) {
+  const saved = localStorage.getItem("acneto-demo-drivers");
+  if (!saved) return;
+
+  try {
+    const drivers = JSON.parse(saved) as Array<Record<string, unknown>>;
+    const updatedDrivers = drivers.map((item) => {
+      if (item.plate !== driver.plate && item.full_name !== driver.full_name) {
+        return item;
+      }
+
+      return {
+        ...item,
+        full_name: driver.full_name,
+        city: driver.city ?? "",
+        state: driver.state ?? "",
+        vehicle_model: driver.vehicle_model ?? "",
+        plate: driver.plate ?? "",
+        phone: driver.phone ?? "Não informado",
+        capacity: driver.capacity ?? "Não informado",
+        compartments: driver.compartments ?? "Não informado",
+        notes: driver.notes ?? "",
+        is_online: driver.is_online,
+        status: driver.status,
+        availability_since:
+          driver.availability_since ?? new Date().toISOString(),
+        latitude: driver.latitude,
+        longitude: driver.longitude,
+      };
+    });
+
+    localStorage.setItem("acneto-demo-drivers", JSON.stringify(updatedDrivers));
+  } catch {
+    return;
+  }
 }
 
 function TopBar({
@@ -161,13 +215,22 @@ function TopBar({
 function HomeView({
   driver,
   onToggle,
+  onUpdate,
   toggling,
 }: {
   driver: Driver;
   onToggle: () => void;
-  onToggling?: boolean;
+  onUpdate: (updates: Partial<Driver>) => void;
   toggling: boolean;
 }) {
+  const operationalStatuses: { value: Driver["status"]; label: string }[] = [
+    { value: "available", label: "Disponível" },
+    { value: "awaiting_loading", label: "Aguardando carregamento" },
+    { value: "awaiting_documents", label: "Aguardando documentação" },
+    { value: "in_transit", label: "Em trânsito" },
+    { value: "awaiting_unloading", label: "Aguardando descarga" },
+  ];
+
   return (
     <div className="space-y-6">
       {/* Status hero */}
@@ -206,6 +269,46 @@ function HomeView({
           )}
           {driver.is_online ? "Ficar Offline" : "Ficar Online"}
         </button>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-bold text-[#0b1d3a]">Status operacional</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Atualize sua situação para orientar a equipe comercial.
+            </p>
+          </div>
+          <Clock size={18} className="text-[#1052c7]" />
+        </div>
+        <select
+          value={driver.is_online ? driver.status : "offline"}
+          disabled={!driver.is_online}
+          onChange={(event) =>
+            onUpdate({
+              status: event.target.value as Driver["status"],
+              last_seen: new Date().toISOString(),
+            })
+          }
+          className="mt-4 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-400"
+        >
+          {!driver.is_online && <option value="offline">Offline</option>}
+          {operationalStatuses.map((status) => (
+            <option key={status.value} value={status.value}>
+              {status.label}
+            </option>
+          ))}
+        </select>
+        <label className="mt-4 block text-xs font-semibold text-slate-500">
+          Observações para o comercial
+          <textarea
+            value={driver.notes ?? ""}
+            onChange={(event) => onUpdate({ notes: event.target.value })}
+            placeholder="Manutenção, documentos ou previsão de liberação"
+            rows={3}
+            className="mt-1.5 w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          />
+        </label>
       </div>
 
       {/* Stats */}

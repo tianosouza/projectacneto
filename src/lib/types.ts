@@ -11,6 +11,10 @@ export type Profile = {
 export type DriverStatus =
   | "offline"
   | "available"
+  | "awaiting_loading"
+  | "awaiting_documents"
+  | "in_transit"
+  | "awaiting_unloading"
   | "in_negotiation"
   | "on_trip";
 
@@ -23,6 +27,8 @@ export type Driver = {
   email: string | null;
   vehicle_model: string | null;
   vehicle_year: number | null;
+  capacity: string | null;
+  compartments: string | null;
   plate: string | null;
   cnh: string | null;
   city: string | null;
@@ -32,6 +38,8 @@ export type Driver = {
   longitude: number | null;
   last_seen: string | null;
   status: DriverStatus;
+  notes: string | null;
+  availability_since: string | null;
   rating: number;
   total_trips: number;
   created_at: string;

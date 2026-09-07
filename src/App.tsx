@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Loader2,
-  Shield,
   Briefcase,
   Truck,
   LogOut,
@@ -34,9 +33,21 @@ type DemoDriver = {
   state: string;
   vehicle_model: string;
   plate: string;
+  phone: string;
+  capacity: string;
+  compartments: string;
+  notes: string;
+  availability_since: string;
   is_online: boolean;
   rating: number;
-  status: "available" | "offline" | "in_negotiation";
+  status:
+    | "available"
+    | "awaiting_loading"
+    | "awaiting_documents"
+    | "in_transit"
+    | "awaiting_unloading"
+    | "offline"
+    | "in_negotiation";
   latitude: number;
   longitude: number;
 };
@@ -87,6 +98,11 @@ const FAKE_DRIVERS: DemoDriver[] = [
     state: "SP",
     vehicle_model: "Mercedes Actros",
     plate: "ABC-1234",
+    phone: "(16) 99999-1234",
+    capacity: "30.000 L",
+    compartments: "5 compartimentos",
+    notes: "Disponível para carregamento em Ribeirão Preto.",
+    availability_since: new Date(Date.now() - 42 * 60 * 1000).toISOString(),
     is_online: true,
     rating: 4.9,
     status: "available",
@@ -100,6 +116,11 @@ const FAKE_DRIVERS: DemoDriver[] = [
     state: "SP",
     vehicle_model: "Volvo FH",
     plate: "DEF-5678",
+    phone: "(19) 98888-4567",
+    capacity: "28.000 L",
+    compartments: "4 compartimentos",
+    notes: "Aguardando retorno sobre documentação.",
+    availability_since: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
     is_online: true,
     rating: 4.8,
     status: "in_negotiation",
@@ -113,6 +134,11 @@ const FAKE_DRIVERS: DemoDriver[] = [
     state: "MG",
     vehicle_model: "Scania R",
     plate: "GHI-9912",
+    phone: "(31) 97777-8910",
+    capacity: "32.000 L",
+    compartments: "6 compartimentos",
+    notes: "Em manutenção preventiva.",
+    availability_since: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     is_online: false,
     rating: 4.7,
     status: "offline",
@@ -233,12 +259,17 @@ function RoleDashboard({
     state: "SP",
     vehicle_model: "",
     plate: "",
+    phone: "",
+    capacity: "",
+    compartments: "",
+    notes: "",
   });
   const [tab, setTab] = useState<"resumo" | "cadastros" | "localizacao">(
     "resumo",
   );
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [cityFilter, setCityFilter] = useState<string>("Todas");
+  const [statusFilter, setStatusFilter] = useState<string>("Todos");
 
   useEffect(() => {
     saveList("acneto-demo-clients", clients);
@@ -254,14 +285,18 @@ function RoleDashboard({
 
   const onlineDrivers = drivers;
   const filteredDrivers = useMemo(() => {
-    if (cityFilter === "Todas") {
-      return onlineDrivers.filter((driver) => driver.is_online);
-    }
-
-    return onlineDrivers.filter(
-      (driver) => driver.is_online && driver.city === cityFilter,
-    );
-  }, [cityFilter, onlineDrivers]);
+    return onlineDrivers
+      .filter((driver) => driver.is_online)
+      .filter((driver) => cityFilter === "Todas" || driver.city === cityFilter)
+      .filter(
+        (driver) => statusFilter === "Todos" || driver.status === statusFilter,
+      )
+      .sort(
+        (first, second) =>
+          new Date(first.availability_since).getTime() -
+          new Date(second.availability_since).getTime(),
+      );
+  }, [cityFilter, onlineDrivers, statusFilter]);
   const totalClients = clients.length;
   const totalOperators = operators.length;
   const activeDrivers = onlineDrivers.filter(
@@ -331,6 +366,11 @@ function RoleDashboard({
       state: driverForm.state,
       vehicle_model: driverForm.vehicle_model.trim(),
       plate: driverForm.plate.trim() || "NOVO-0000",
+      phone: "Não informado",
+      capacity: "Não informado",
+      compartments: "Não informado",
+      notes: "",
+      availability_since: new Date().toISOString(),
       is_online: true,
       rating: 4.8,
       status: "available",
@@ -345,6 +385,10 @@ function RoleDashboard({
       state: "SP",
       vehicle_model: "",
       plate: "",
+      phone: "",
+      capacity: "",
+      compartments: "",
+      notes: "",
     });
   };
 
@@ -365,6 +409,7 @@ function RoleDashboard({
                 Acesso demo
               </p>
               <h1 className="text-2xl font-bold text-[#0c1017]">{title}</h1>
+              <p className="mt-0.5 text-sm text-slate-500">{subtitle}</p>
             </div>
           </div>
 
@@ -499,7 +544,7 @@ function RoleDashboard({
                       Nenhum motorista online no momento.
                     </div>
                   ) : (
-                    onlineDrivers.map((driver) => (
+                    filteredDrivers.map((driver) => (
                       <div
                         key={driver.id}
                         className="rounded-xl border border-slate-200 p-3"
@@ -519,13 +564,27 @@ function RoleDashboard({
                             <span
                               className={`h-1.5 w-1.5 rounded-full ${driver.is_online ? "bg-emerald-500" : "bg-slate-400"}`}
                             />
-                            {driver.is_online ? "Online" : "Offline"}
+                            {statusLabel(driver.status)}
                           </span>
                         </div>
-                        <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                          <span>{driver.vehicle_model}</span>
-                          <span>{driver.plate}</span>
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-500">
+                          <span>
+                            {driver.vehicle_model} · {driver.plate}
+                          </span>
+                          <span>
+                            {driver.capacity} · {driver.compartments}
+                          </span>
+                          <span>{driver.phone}</span>
+                          <span className="text-right">
+                            Desde{" "}
+                            {formatAvailability(driver.availability_since)}
+                          </span>
                         </div>
+                        {driver.notes && (
+                          <p className="mt-2 text-xs text-slate-500">
+                            {driver.notes}
+                          </p>
+                        )}
                       </div>
                     ))
                   )}
@@ -604,6 +663,51 @@ function RoleDashboard({
                   placeholder="Placa"
                   className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
                 />
+                <input
+                  value={driverForm.phone}
+                  onChange={(e) =>
+                    setDriverForm((prev) => ({
+                      ...prev,
+                      phone: e.target.value,
+                    }))
+                  }
+                  placeholder="Telefone"
+                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+                <input
+                  value={driverForm.capacity}
+                  onChange={(e) =>
+                    setDriverForm((prev) => ({
+                      ...prev,
+                      capacity: e.target.value,
+                    }))
+                  }
+                  placeholder="Capacidade (ex.: 30.000 L)"
+                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+                <input
+                  value={driverForm.compartments}
+                  onChange={(e) =>
+                    setDriverForm((prev) => ({
+                      ...prev,
+                      compartments: e.target.value,
+                    }))
+                  }
+                  placeholder="Compartimentação"
+                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+                <textarea
+                  value={driverForm.notes}
+                  onChange={(e) =>
+                    setDriverForm((prev) => ({
+                      ...prev,
+                      notes: e.target.value,
+                    }))
+                  }
+                  placeholder="Observações sobre manutenção, documentos ou liberação"
+                  rows={2}
+                  className="resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
+                />
               </div>
 
               <button
@@ -679,6 +783,8 @@ function RoleDashboard({
             selectedDriverId={selectedDriverId}
             cityFilter={cityFilter}
             setCityFilter={setCityFilter}
+            statusFilter={statusFilter}
+            setStatusFilter={setStatusFilter}
             onSelectDriver={setSelectedDriverId}
           />
         )}
@@ -692,12 +798,16 @@ function LocationMapView({
   selectedDriverId,
   cityFilter,
   setCityFilter,
+  statusFilter,
+  setStatusFilter,
   onSelectDriver,
 }: {
   drivers: DemoDriver[];
   selectedDriverId: string | null;
   cityFilter: string;
   setCityFilter: (value: string) => void;
+  statusFilter: string;
+  setStatusFilter: (value: string) => void;
   onSelectDriver: (value: string | null) => void;
 }) {
   const cities = [
@@ -711,14 +821,15 @@ function LocationMapView({
 
   const getStatusColor = (status: DemoDriver["status"]) => {
     if (status === "available") return "bg-emerald-500";
-    if (status === "in_negotiation") return "bg-amber-500";
+    if (status === "in_transit") return "bg-blue-500";
+    if (status === "awaiting_documents") return "bg-rose-500";
+    if (status === "awaiting_loading" || status === "awaiting_unloading")
+      return "bg-amber-500";
     return "bg-slate-400";
   };
 
   const getStatusLabel = (status: DemoDriver["status"]) => {
-    if (status === "available") return "Disponível";
-    if (status === "in_negotiation") return "Negociando";
-    return "Offline";
+    return statusLabel(status);
   };
 
   const routeTarget = {
@@ -750,6 +861,18 @@ function LocationMapView({
                 {city}
               </option>
             ))}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          >
+            <option value="Todos">Todos os status</option>
+            <option value="available">Disponível</option>
+            <option value="awaiting_loading">Aguardando carregamento</option>
+            <option value="awaiting_documents">Aguardando documentação</option>
+            <option value="in_transit">Em trânsito</option>
+            <option value="awaiting_unloading">Aguardando descarga</option>
           </select>
         </div>
       </div>
@@ -858,6 +981,24 @@ function LocationMapView({
                   </strong>
                 </div>
                 <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
+                  <span>Telefone</span>
+                  <strong className="text-[#0b1d3a]">
+                    {selectedDriver.phone}
+                  </strong>
+                </div>
+                <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
+                  <span>Capacidade</span>
+                  <strong className="text-[#0b1d3a]">
+                    {selectedDriver.capacity}
+                  </strong>
+                </div>
+                <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
+                  <span>Compartimentação</span>
+                  <strong className="text-[#0b1d3a]">
+                    {selectedDriver.compartments}
+                  </strong>
+                </div>
+                <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2">
                   <span>Local</span>
                   <strong className="text-[#0b1d3a]">
                     {selectedDriver.city} / {selectedDriver.state}
@@ -870,6 +1011,11 @@ function LocationMapView({
                   </strong>
                 </div>
               </div>
+              {selectedDriver.notes && (
+                <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {selectedDriver.notes}
+                </p>
+              )}
 
               <button
                 type="button"
@@ -985,6 +1131,27 @@ function MetricCard({
       </div>
     </div>
   );
+}
+
+function statusLabel(status: DemoDriver["status"]): string {
+  const labels: Record<DemoDriver["status"], string> = {
+    offline: "Offline",
+    available: "Disponível",
+    awaiting_loading: "Aguardando carregamento",
+    awaiting_documents: "Aguardando documentação",
+    in_transit: "Em trânsito",
+    awaiting_unloading: "Aguardando descarga",
+    in_negotiation: "Negociando",
+  };
+  return labels[status] ?? status;
+}
+
+function formatAvailability(value: string): string {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "agora";
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h`;
 }
 
 export default App;

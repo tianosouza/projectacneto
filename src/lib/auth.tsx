@@ -204,6 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signUp = async (email: string, password: string, fullName: string) => {
+    void fullName;
     const normalizedEmail = email.trim().toLowerCase();
     const role = (Object.keys(DEMO_ACCOUNTS) as DemoRole[]).find(
       (key) =>

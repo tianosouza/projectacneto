@@ -1,0 +1,73 @@
+SISTEMA WEB
+qua., 2 de set. de 2026
+
+Resumo:
+
+Reunião definiu o escopo inicial de um aplicativo para conectar motoristas disponíveis à equipe comercial.
+• Motoristas informarão disponibilidade e localização automaticamente
+• Painel exibirá veículos ativos, capacidade e características
+• Escopo inicial não inclui acompanhamento de cargas ou rotas
+• Operação realiza cerca de 300 fretes mensais fixos
+• Frota fixa inclui aproximadamente 29 motoristas ou caminhões
+• Integração com terceiros e agenciadores permanece em definição
+
+
+Tarefas:
+
+* Meeting participant: Definir no aplicativo os status operacionais que o motorista deverá atualizar, incluindo disponibilidade, aguardando carregamento, aguardando documentação, trânsito e aguardando descarga.
+* Meeting participant: Implementar filtros por horário e status de disponibilidade para priorizar os caminhões que ficaram disponíveis primeiro.
+* Meeting participant: Criar um campo de observações para registrar manutenção, renovação de documentos e previsão de liberação do caminhão.
+* Meeting participant: Estruturar perfis separados para motoristas fixos, terceiros e agenciadores dentro do aplicativo.
+* Meeting participant: Estabelecer como o comercial receberá as disponibilidades informadas diretamente pelos motoristas.
+* Meeting participant: Definir uma forma inicial de divulgar o aplicativo e captar motoristas em regiões sem agenciadores.
+* Meeting participant: Criar uma função de ativação e desativação da visibilidade dos veículos disponíveis.
+* Tarciano Sales: Acrescente ao painel as informações de telefone, capacidade e compartimentação dos veículos.
+* Silvio Rodrigues de Sousa: Finalize com Tarciano Sales o cadastro dos motoristas e das informações necessárias para que eles indiquem sua disponibilidade no aplicativo.
+* Silvio Rodrigues de Sousa: Avalie a ferramenta após a ativação e identifique melhorias a serem incorporadas conforme a utilização.
+
+
+Principais Pontos de Discussão:
+
+Fluxo de agendamento e status do motorista
+Silvio descreveu o processo de liberação, carregamento, deslocamento e descarga, distinguindo os clientes que exigem agendamento em portais próprios das bases em que o motorista agenda a descarga diretamente na chegada. Em seguida, detalhou os status que o motorista deveria atualizar no aplicativo e sugeriu um campo para observações sobre manutenção, documentos e previsão de disponibilidade.
+
+Comunicação entre comercial e logística
+A discussão esclareceu como o comercial comunica novas cargas à logística e quais informações são necessárias para direcionar o caminhão. Silvio explicou que fornece previamente os dados do veículo e do motorista, enquanto o comercial informa o cliente e os locais de carga e descarga após vender o frete.
+
+Capacidades, cargas completas e composição de pedidos
+Os participantes analisaram a relação entre capacidade do caminhão e volume vendido. Silvio explicou que os veículos normalmente carregam até cerca de 3 mil litros abaixo da capacidade máxima e que cargas menores só são aceitas quando podem ser combinadas com outro pedido compatível na mesma região.
+
+Volumes de transferência e emissão do CTE
+Silvio diferenciou cargas regulares de transferências entre filiais, nas quais podem existir volumes quebrados. Também foram esclarecidas as duas modalidades de emissão do CTE: pela própria empresa ou pelo cliente, em operações terceirizadas.
+
+Volume operacional e uso de terceiros
+A conversa abordou a quantidade de clientes, o volume médio de fretes e a composição da frota. A operação controla aproximadamente 29 veículos fixos e realiza cerca de 300 fretes mensais com essa base, enquanto o total pode chegar a 400 ou 450 fretes com a contratação variável de veículos externos.
+
+Modelo de aplicativo para motoristas e agenciadores
+Os participantes discutiram a expansão da demanda e a necessidade de um aplicativo que conecte motoristas fixos, terceiros, agenciadores e comercial. Silvio ressaltou a importância de separar perfis e controlar a visibilidade dos veículos, enquanto Bernardo propôs o cadastro direto de disponibilidade pelos motoristas.
+
+Disponibilidade regional e ativação de veículos
+Silvio considerou viável receber ofertas diretamente de motoristas, mas observou que regiões remotas precisariam de uma divulgação inicial e de contatos locais. A discussão permaneceu concentrada na criação de mecanismos para ativar, desativar e filtrar veículos realmente disponíveis, sem encerrar a definição do modelo.
+
+Central de motoristas e modernização comercial
+Bernardo Macambira descreveu uma central com vários operadores para receber a disponibilidade dos motoristas, contatá-los pelo WhatsApp e encaminhar cargas e agendamentos. A proposta foi comparada ao modelo de aplicativos de transporte e reconhecida como uma forma de modernizar ou substituir a intermediação tradicional de agenciadores.
+
+Objetivo operacional da solução
+Tarciano Sales explicou que o propósito é automatizar o processo comercial e disponibilizar informações rápidas e em tempo real para a equipe de vendas. A central deverá permitir localizar motoristas, negociar o frete e encaminhar os dados necessários para a continuidade do agendamento e do transporte.
+
+Estrutura do portal e painel de vendas
+Tarciano apresentou o protótipo do portal, com áreas para administrador, equipe de vendas e motoristas. O painel comercial exibirá a disponibilidade, a localização e os dados dos veículos, incluindo informações que ainda precisavam ser acrescentadas, como telefone, capacidade e compartimentação.
+
+Aplicativo e cadastro dos motoristas
+Foi demonstrado o aplicativo utilizado pelo motorista para indicar sua disponibilidade. Bernardo deixou a reunião e orientou Silvio a continuar com Tarciano a finalização do cadastro dos motoristas e das informações necessárias para o uso do sistema.
+
+Ativação, localização e escopo inicial
+Tarciano mostrou o fluxo de criação de conta e ativação do status online pelo motorista. A localização será obtida automaticamente pelo aplicativo e exibida à equipe de vendas; o escopo inicial contempla apenas disponibilidade e localização, sem acompanhamento operacional da rota.
+
+Evolução posterior e avaliação da ferramenta
+Silvio confirmou o entendimento de que a primeira versão servirá para identificar onde há motoristas disponíveis. Foi esclarecido que o gerenciamento de rotas poderá ser incluído no futuro, e os participantes concordaram em avaliar melhorias e incorporar novas funções conforme o uso.
+
+
+Bloco de Notas:
+
+* Sem anotações
