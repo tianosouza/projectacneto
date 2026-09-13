@@ -164,6 +164,7 @@ function RoleDashboard({
   const [routeError, setRouteError] = useState("");
   const [cityFilter, setCityFilter] = useState<string>("Todas");
   const [statusFilter, setStatusFilter] = useState<string>("Todos");
+  const [locationClientSearch, setLocationClientSearch] = useState("");
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
   const [registrationRequests, setRegistrationRequests] = useState<
     PendingUser[]
@@ -519,7 +520,7 @@ function RoleDashboard({
           client.latitude as number,
         ]),
       ];
-      const response = await apiFetch(
+      const response = await fetch(
         `https://router.project-osrm.org/route/v1/driving/${waypoints
           .map(([longitude, latitude]) => `${longitude},${latitude}`)
           .join(";")}?overview=full&geometries=geojson&steps=false`,
@@ -864,6 +865,8 @@ function RoleDashboard({
           <button
             onClick={() => {
               setLocationSearch("");
+              setLocationClientSearch("");
+              setSelectedClientIds([]);
               setTab("localizacao");
             }}
             className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
@@ -1318,6 +1321,9 @@ function RoleDashboard({
           <LocationMapView
             drivers={filteredDrivers}
             clients={clients}
+            clientSearch={locationClientSearch}
+            setClientSearch={setLocationClientSearch}
+            onClearClientSelection={() => setSelectedClientIds([])}
             selectedClientIds={selectedClientIds}
             routePath={routePath}
             routeSummary={routeSummary}
@@ -1632,6 +1638,9 @@ function formatRouteDuration(seconds: number): string {
 function LocationMapView({
   drivers,
   clients,
+  clientSearch,
+  setClientSearch,
+  onClearClientSelection,
   selectedClientIds,
   routePath,
   routeSummary,
@@ -1648,6 +1657,9 @@ function LocationMapView({
 }: {
   drivers: DemoDriver[];
   clients: DemoContact[];
+  clientSearch: string;
+  setClientSearch: (value: string) => void;
+  onClearClientSelection: () => void;
   selectedClientIds: string[];
   routePath: LatLngTuple[];
   routeSummary: { distance: number; duration: number } | null;
@@ -1680,7 +1692,21 @@ function LocationMapView({
     (driver) =>
       Number.isFinite(driver.latitude) && Number.isFinite(driver.longitude),
   );
-  const locatedClients = clients.filter(
+  const normalizeClientSearch = (value: string) =>
+    value
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  const normalizedClientSearch = normalizeClientSearch(clientSearch);
+  const searchedClients = normalizedClientSearch
+    ? clients.filter((client) =>
+        normalizeClientSearch(
+          `${client.name} ${client.email} ${client.region}`,
+        ).includes(normalizedClientSearch),
+      )
+    : [];
+  const locatedClients = searchedClients.filter(
     (client) =>
       Number.isFinite(client.latitude) && Number.isFinite(client.longitude),
   );
@@ -1742,8 +1768,50 @@ function LocationMapView({
             <option value="in_transit">Em trânsito</option>
             <option value="awaiting_unloading">Aguardando descarga</option>
           </select>
+          <input
+            type="search"
+            value={clientSearch}
+            onChange={(event) => {
+              const value = event.target.value;
+              setClientSearch(value);
+              if (!value.trim()) onClearClientSelection();
+            }}
+            placeholder="Buscar cliente"
+            aria-label="Buscar cliente no mapa"
+            className="min-w-44 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          />
         </div>
       </div>
+
+      {!clientSearch.trim() && (
+        <p className="mb-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          Busque um cliente por nome, e-mail ou região para exibi-lo no mapa.
+        </p>
+      )}
+      {clientSearch.trim() && (
+        <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+          {searchedClients.length === 0 ? (
+            <p>Nenhum cliente encontrado para essa busca.</p>
+          ) : (
+            <div className="space-y-1">
+              <p className="font-semibold">
+                {searchedClients.length} cliente
+                {searchedClients.length === 1 ? "" : "s"} encontrado
+                {searchedClients.length === 1 ? "" : "s"}.
+              </p>
+              {searchedClients.map((client) => (
+                <p key={client.id}>
+                  {client.name} · {client.region || "Região não informada"}
+                  {!Number.isFinite(client.latitude) ||
+                  !Number.isFinite(client.longitude)
+                    ? " · sem localização GPS"
+                    : " · exibido no mapa"}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-[1.5fr_0.8fr]">
         <div className="relative h-[420px] overflow-hidden rounded-2xl border border-slate-200">
@@ -1819,7 +1887,9 @@ function LocationMapView({
                 Nenhum motorista online
               </p>
               <p className="mt-0.5 text-xs text-slate-500">
-                O mapa continuará disponível para visualizar os clientes.
+                {clientSearch.trim()
+                  ? "Nenhum cliente localizado com essa busca."
+                  : "Busque um cliente para exibi-lo no mapa."}
               </p>
             </div>
           )}

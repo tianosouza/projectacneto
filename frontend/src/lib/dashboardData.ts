@@ -87,6 +87,13 @@ const developmentClientData: Array<[string, string, string, number, number]> = [
     -15.7975,
     -47.8919,
   ],
+  [
+    "Cliente Demo Ceara",
+    "cliente.ceara@demo.local",
+    "Ceará",
+    -3.71722,
+    -38.5434,
+  ],
 ];
 
 const developmentClients: DemoContact[] = developmentClientData.map(
