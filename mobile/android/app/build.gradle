@@ -93,7 +93,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.0.0"
+        versionName "1.0.1-beta"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
@@ -134,9 +134,10 @@ android {
 
 android.applicationVariants.all { variant ->
     variant.outputs.all { output ->
-        def version = variant.versionName
-        def code = variant.versionCode
-        output.outputFileName = "next-driver-motoristas-v${version}-${code}.apk"
+        def safeAppName = "next-driver-motoristas"
+        def safeVersion = variant.versionName.replaceAll("[^A-Za-z0-9._-]", "-")
+        def buildType = variant.buildType.name
+        output.outputFileName = "${safeAppName}-v${safeVersion}-${variant.versionCode}-${buildType}.apk"
     }
 }
 

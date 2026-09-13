@@ -673,6 +673,12 @@ function RoleDashboard({
     setRouteError("");
   }, [filteredDrivers, selectedDriverId]);
 
+  useEffect(() => {
+    if (selectedDriverId && selectedClientIds.length === 2) {
+      setLocationClientSearch("");
+    }
+  }, [selectedClientIds.length, selectedDriverId]);
+
   const handleAdd = async () => {
     if (!name.trim() || !email.trim()) return;
 
@@ -1863,6 +1869,9 @@ function LocationMapView({
     (driver) =>
       Number.isFinite(driver.latitude) && Number.isFinite(driver.longitude),
   );
+  const routeFocusActive = Boolean(
+    selectedDriverId && selectedClientIds.length === 2,
+  );
   const normalizeClientSearch = (value: string) =>
     value
       .trim()
@@ -1881,12 +1890,23 @@ function LocationMapView({
     (client) =>
       Number.isFinite(client.latitude) && Number.isFinite(client.longitude),
   );
+  const visibleDrivers = routeFocusActive
+    ? locatedDrivers.filter((driver) => driver.id === selectedDriverId)
+    : locatedDrivers;
+  const visibleClients = routeFocusActive
+    ? clients.filter(
+        (client) =>
+          selectedClientIds.includes(client.id) &&
+          Number.isFinite(client.latitude) &&
+          Number.isFinite(client.longitude),
+      )
+    : locatedClients;
   const mapPoints: LatLngTuple[] = [
-    ...locatedDrivers.map(
+    ...visibleDrivers.map(
       (driver) =>
         [driver.latitude as number, driver.longitude as number] as LatLngTuple,
     ),
-    ...locatedClients.map(
+    ...visibleClients.map(
       (client) =>
         [client.latitude as number, client.longitude as number] as LatLngTuple,
     ),
@@ -1956,7 +1976,9 @@ function LocationMapView({
 
       {!clientSearch.trim() && (
         <p className="mb-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-          Busque um cliente por nome, e-mail ou região para exibi-lo no mapa.
+          {routeFocusActive
+            ? "Rota em foco: motorista, posto e cliente final selecionados."
+            : "Busque um cliente por nome, e-mail ou região para exibi-lo no mapa."}
         </p>
       )}
       {clientSearch.trim() && (
@@ -1998,11 +2020,11 @@ function LocationMapView({
               url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
             />
             <MapViewport
-              drivers={locatedDrivers}
-              clients={locatedClients}
+              drivers={visibleDrivers}
+              clients={visibleClients}
               selectedDriver={selectedDriver}
             />
-            {locatedDrivers.map((driver) => {
+            {visibleDrivers.map((driver) => {
               const isSelected = selectedDriver?.id === driver.id;
               return (
                 <Marker
@@ -2026,7 +2048,7 @@ function LocationMapView({
                 </Marker>
               );
             })}
-            {locatedClients.map((client) => (
+            {visibleClients.map((client) => (
               <Marker
                 key={client.id}
                 position={[
@@ -2063,7 +2085,7 @@ function LocationMapView({
               />
             )}
           </MapContainer>
-          {locatedDrivers.length === 0 && (
+          {visibleDrivers.length === 0 && (
             <div className="pointer-events-none absolute left-1/2 top-5 z-[1000] -translate-x-1/2 rounded-2xl border border-amber-200 bg-white/95 px-4 py-3 text-center shadow-lg backdrop-blur">
               <p className="text-sm font-bold text-amber-800">
                 Nenhum motorista online

@@ -36,6 +36,8 @@ async function apiFetch(path: string, init?: RequestInit) {
 type Driver = {
   id: string;
   full_name: string;
+  cpf?: string | null;
+  email: string | null;
   phone: string | null;
   city: string | null;
   state: string | null;
@@ -46,6 +48,9 @@ type Driver = {
   status: string;
   vehicle_model: string | null;
   plate: string | null;
+  capacity: string | null;
+  compartments: string | null;
+  notes?: string | null;
   rating: number;
 };
 
@@ -135,6 +140,9 @@ export default function App() {
   const [trackingMode, setTrackingMode] = useState<
     "background" | "foreground" | null
   >(null);
+  const [screen, setScreen] = useState<
+    "home" | "driver-data" | "vehicle" | "history"
+  >("home");
 
   useEffect(() => {
     void restoreSession();
@@ -244,6 +252,20 @@ export default function App() {
     );
   }
 
+  if (screen === "driver-data") {
+    return (
+      <DriverDataScreen driver={driver} onBack={() => setScreen("home")} />
+    );
+  }
+
+  if (screen === "vehicle") {
+    return <VehicleScreen driver={driver} onBack={() => setScreen("home")} />;
+  }
+
+  if (screen === "history") {
+    return <HistoryScreen driver={driver} onBack={() => setScreen("home")} />;
+  }
+
   return (
     <DriverHome
       driver={driver}
@@ -251,6 +273,9 @@ export default function App() {
       submitting={submitting}
       onToggle={toggleOnline}
       onLogout={logout}
+      onOpenDriverData={() => setScreen("driver-data")}
+      onOpenVehicle={() => setScreen("vehicle")}
+      onOpenHistory={() => setScreen("history")}
     />
   );
 }
@@ -319,9 +344,6 @@ function LoginScreen({
             <Text style={styles.primaryButtonText}>Entrar no painel</Text>
           )}
         </TouchableOpacity>
-        <Text style={styles.hint}>
-          API compartilhada com o frontend: {API_URL || "não configurada"}
-        </Text>
       </View>
     </SafeAreaView>
   );
@@ -333,12 +355,18 @@ function DriverHome({
   submitting,
   onToggle,
   onLogout,
+  onOpenDriverData,
+  onOpenVehicle,
+  onOpenHistory,
 }: {
   driver: Driver;
   trackingMode: "background" | "foreground" | null;
   submitting: boolean;
   onToggle: (value: boolean) => void;
   onLogout: () => void;
+  onOpenDriverData: () => void;
+  onOpenVehicle: () => void;
+  onOpenHistory: () => void;
 }) {
   const coordinates =
     driver.latitude !== null && driver.longitude !== null
@@ -347,99 +375,321 @@ function DriverHome({
 
   return (
     <SafeAreaView style={styles.safeLight}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle="light-content" />
       <ScrollView contentContainerStyle={styles.home}>
         <View style={styles.header}>
-          <View>
+          <TouchableOpacity onPress={onOpenDriverData}>
             <Text style={styles.eyebrowDark}>PAINEL DO MOTORISTA</Text>
             <Text style={styles.greeting}>
               Olá, {driver.full_name.split(" ")[0]}
             </Text>
-          </View>
+            <Text style={styles.profileLink}>Meus dados ›</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={onLogout} style={styles.logoutButton}>
             <Text style={styles.logoutText}>Sair</Text>
           </TouchableOpacity>
         </View>
 
-        <View
-          style={[styles.statusPanel, driver.is_online && styles.statusOnline]}
+        <TouchableOpacity
+          disabled={submitting}
+          onPress={() => onToggle(!driver.is_online)}
+          style={[
+            styles.availabilityHero,
+            driver.is_online && styles.availabilityActive,
+          ]}
         >
-          <View style={styles.statusRow}>
-            <View>
-              <Text style={styles.statusLabel}>STATUS DA OPERAÇÃO</Text>
-              <Text style={styles.statusValue}>
-                {driver.is_online ? "Você está online" : "Você está offline"}
-              </Text>
-              <Text style={styles.statusDescription}>
-                {driver.is_online
-                  ? trackingMode === "background"
-                    ? "Sua posição continua sendo enviada em segundo plano."
-                    : "Sua posição está sendo enviada enquanto o Expo Go está aberto."
-                  : "Fique online para receber novas propostas."}
+          <View
+            style={[
+              styles.availabilityRing,
+              submitting && styles.availabilityBusy,
+            ]}
+          >
+            <View
+              style={[
+                styles.availabilityCore,
+                driver.is_online &&
+                  !submitting &&
+                  styles.availabilityCoreActive,
+                submitting && styles.availabilityCoreLoading,
+              ]}
+            >
+              {submitting ? (
+                <ActivityIndicator color="#07399f" />
+              ) : (
+                <Text
+                  style={[
+                    styles.availabilityPin,
+                    driver.is_online && styles.availabilityPinActive,
+                  ]}
+                >
+                  ●
+                </Text>
+              )}
+              <Text
+                style={[
+                  styles.availabilityHint,
+                  driver.is_online &&
+                    !submitting &&
+                    styles.availabilityHintActive,
+                ]}
+              >
+                {submitting ? "AGUARDE" : driver.is_online ? "ATIVO" : "TOQUE"}
               </Text>
             </View>
-            <Switch
-              disabled={submitting}
-              onValueChange={onToggle}
-              thumbColor="#fff"
-              trackColor={{ false: "#94a3b8", true: "#0e4db7" }}
-              value={driver.is_online}
-            />
+          </View>
+          <Text style={styles.availabilityTitle}>
+            {submitting
+              ? "CAPTURANDO GPS..."
+              : driver.is_online
+                ? "DISPONÍVEL"
+                : "INATIVO"}
+          </Text>
+          <Text style={styles.availabilityDescription}>
+            {driver.is_online
+              ? "Visível para a central de vendas"
+              : "Não aparece no painel do operador"}
+          </Text>
+          <Text style={styles.availabilityLocation}>
+            ● {driver.city || "Localização aguardando GPS"}
+            {driver.state ? `, ${driver.state}` : ""}
+            {driver.latitude !== null && driver.longitude !== null
+              ? ` — ${coordinates}`
+              : ""}
+          </Text>
+        </TouchableOpacity>
+
+        <View style={styles.statusListCard}>
+          <Text style={styles.statusListTitle}>MEU STATUS ATUAL</Text>
+          {[
+            ["available", "DISPONÍVEL", "#fff000"],
+            ["awaiting_loading", "AG. CARREGAMENTO", "#ffb347"],
+            ["in_transit", "EM TRÂNSITO", "#6ccdf5"],
+            ["awaiting_unloading", "AG. DESCARGA", "#d5a6ff"],
+            ["maintenance", "MANUTENÇÃO", "#ff5d6c"],
+          ].map(([value, label, color]) => (
+            <View
+              key={value}
+              style={[
+                styles.statusOption,
+                driver.status === value && styles.statusOptionActive,
+              ]}
+            >
+              <View style={[styles.statusDot, { backgroundColor: color }]} />
+              <Text style={styles.statusOptionText}>{label}</Text>
+              {driver.status === value && (
+                <Text style={styles.statusCheck}>✓</Text>
+              )}
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.quickGrid}>
+          <TouchableOpacity onPress={onOpenVehicle} style={styles.quickCard}>
+            <Text style={styles.quickIcon}>▣</Text>
+            <Text style={styles.quickTitle}>Meu veículo</Text>
+            <Text style={styles.quickSubtitle}>Dados e capacidade</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onOpenHistory} style={styles.quickCard}>
+            <Text style={styles.quickIcon}>▤</Text>
+            <Text style={styles.quickTitle}>Histórico</Text>
+            <Text style={styles.quickSubtitle}>Últimas sinalizações</Text>
+          </TouchableOpacity>
+        </View>
+
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function DriverDataScreen({
+  driver,
+  onBack,
+}: {
+  driver: Driver;
+  onBack: () => void;
+}) {
+  return (
+    <SafeAreaView style={styles.dataSafe}>
+      <StatusBar barStyle="light-content" />
+      <ScrollView contentContainerStyle={styles.dataScreen}>
+        <View style={styles.dataHeader}>
+          <TouchableOpacity onPress={onBack} style={styles.backButton}>
+            <Text style={styles.backButtonText}>‹</Text>
+          </TouchableOpacity>
+          <View style={styles.dataHeaderCopy}>
+            <Text style={styles.dataEyebrow}>PERFIL</Text>
+            <Text style={styles.dataTitle}>Dados do motorista</Text>
           </View>
         </View>
 
-        <View style={styles.locationCard}>
-          <View style={styles.locationIcon}>
-            <Text style={styles.locationIconText}>GPS</Text>
+        <View style={styles.profileHero}>
+          <View style={styles.profileAvatar}>
+            <Text style={styles.profileAvatarText}>
+              {driver.full_name.charAt(0).toUpperCase()}
+            </Text>
           </View>
-          <View style={styles.locationContent}>
-            <Text style={styles.sectionLabel}>LOCALIZAÇÃO ATUAL</Text>
-            <Text style={styles.locationCity}>
-              {driver.city ?? "Localização identificada pelo GPS"}
-              {driver.state ? ` · ${driver.state}` : ""}
-            </Text>
-            <Text style={styles.coordinates}>{coordinates}</Text>
-            <Text style={styles.liveText}>
-              {trackingMode === "background"
-                ? "● Rastreamento em segundo plano ativo"
-                : trackingMode === "foreground"
-                  ? "● Rastreamento ativo no Expo Go"
-                  : "Rastreamento pausado"}
-            </Text>
+          <View style={styles.profileHeroCopy}>
+            <Text style={styles.profileName}>{driver.full_name}</Text>
+            <Text style={styles.profileRole}>MOTORISTA ACNETO</Text>
           </View>
         </View>
 
-        <View style={styles.statsGrid}>
-          <Stat
+        <Text style={styles.dataSectionLabel}>DADOS PESSOAIS</Text>
+        <View style={styles.dataCard}>
+          <DataRow label="Nome completo" value={driver.full_name} />
+          <DataRow label="CPF" value={driver.cpf || "Não informado"} />
+          <DataRow label="E-mail" value={driver.email || "Não informado"} />
+          <DataRow label="Telefone" value={driver.phone || "Não informado"} />
+        </View>
+
+        <Text style={styles.dataSectionLabel}>LOCALIZAÇÃO</Text>
+        <View style={styles.dataCard}>
+          <DataRow
+            label="Cidade"
+            value={`${driver.city || "Não informada"}${driver.state ? ` · ${driver.state}` : ""}`}
+          />
+          <DataRow
             label="Status"
             value={statusLabels[driver.status] ?? driver.status}
+            accent={driver.is_online}
           />
-          <Stat label="Avaliação" value={Number(driver.rating).toFixed(1)} />
-          <Stat
-            label="Veículo"
-            value={driver.vehicle_model ?? "Não informado"}
-          />
-          <Stat label="Placa" value={driver.plate ?? "Não informada"} />
         </View>
 
-        <View style={styles.infoCard}>
-          <Text style={styles.cardTitle}>Permissão de localização</Text>
-          <Text style={styles.infoText}>
-            No Expo Go, a localização é enviada enquanto ele estiver aberto.
-            Para manter o GPS com a tela bloqueada ou outro app aberto, use um
-            development build nativo da ACNETO.
-          </Text>
-          <TouchableOpacity
-            onPress={() => Linking.openSettings()}
-            style={styles.settingsButton}
-          >
-            <Text style={styles.settingsButtonText}>
-              Abrir configurações do celular
-            </Text>
-          </TouchableOpacity>
+        <Text style={styles.dataSectionLabel}>VEÍCULO</Text>
+        <View style={styles.dataCard}>
+          <DataRow
+            label="Modelo"
+            value={driver.vehicle_model || "Não informado"}
+          />
+          <DataRow label="Placa" value={driver.plate || "Não informada"} />
+          <DataRow
+            label="Capacidade"
+            value={driver.capacity || "Não informada"}
+          />
+          <DataRow
+            label="Compartimentos"
+            value={driver.compartments || "Não informado"}
+          />
         </View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function DataRow({
+  label,
+  value,
+  accent = false,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
+  return (
+    <View style={styles.dataRow}>
+      <Text style={styles.dataRowLabel}>{label}</Text>
+      <Text style={[styles.dataRowValue, accent && styles.dataRowAccent]}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function VehicleScreen({
+  driver,
+  onBack,
+}: {
+  driver: Driver;
+  onBack: () => void;
+}) {
+  return (
+    <SafeAreaView style={styles.dataSafe}>
+      <StatusBar barStyle="light-content" />
+      <ScrollView contentContainerStyle={styles.dataScreen}>
+        <DataScreenHeader title="Dados do veículo" onBack={onBack} />
+        <Text style={styles.dataSectionLabel}>INFORMAÇÕES DO VEÍCULO</Text>
+        <View style={styles.dataCard}>
+          <DataRow label="Placa" value={driver.plate || "Não informada"} />
+          <DataRow
+            label="Tipo do veículo"
+            value={driver.vehicle_model || "Não informado"}
+          />
+          <DataRow
+            label="Capacidade (litros)"
+            value={driver.capacity || "Não informada"}
+          />
+          <DataRow
+            label="Compartimentos"
+            value={driver.compartments || "Não informado"}
+          />
+          <DataRow
+            label="Observações"
+            value={driver.notes || "Nenhuma observação"}
+          />
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function HistoryScreen({
+  driver,
+  onBack,
+}: {
+  driver: Driver;
+  onBack: () => void;
+}) {
+  const status = statusLabels[driver.status] ?? driver.status;
+  return (
+    <SafeAreaView style={styles.dataSafe}>
+      <StatusBar barStyle="light-content" />
+      <ScrollView contentContainerStyle={styles.dataScreen}>
+        <DataScreenHeader title="Histórico de status" onBack={onBack} />
+        <View style={styles.historyCard}>
+          <View style={[styles.historyDot, { backgroundColor: "#fff000" }]} />
+          <View style={styles.historyCopy}>
+            <Text style={styles.historyStatus}>{status.toUpperCase()}</Text>
+            <Text style={styles.historyPlace}>
+              {driver.city || "Localização não informada"}
+              {driver.state ? `, ${driver.state}` : ""}
+            </Text>
+          </View>
+          <Text style={styles.historyTime}>Agora</Text>
+        </View>
+        <View style={styles.historyCard}>
+          <View style={[styles.historyDot, { backgroundColor: "#6ccdf5" }]} />
+          <View style={styles.historyCopy}>
+            <Text style={styles.historyStatus}>LOCALIZAÇÃO</Text>
+            <Text style={styles.historyPlace}>Última atualização GPS</Text>
+          </View>
+          <Text style={styles.historyTime}>
+            {driver.last_seen
+              ? new Date(driver.last_seen).toLocaleTimeString("pt-BR")
+              : "--:--"}
+          </Text>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function DataScreenHeader({
+  title,
+  onBack,
+}: {
+  title: string;
+  onBack: () => void;
+}) {
+  return (
+    <View style={styles.dataHeader}>
+      <TouchableOpacity onPress={onBack} style={styles.backButton}>
+        <Text style={styles.backButtonText}>‹</Text>
+      </TouchableOpacity>
+      <View style={styles.dataHeaderCopy}>
+        <Text style={styles.dataEyebrow}>NEXT DRIVER</Text>
+        <Text style={styles.dataTitle}>{title}</Text>
+      </View>
+    </View>
   );
 }
 
@@ -455,22 +705,22 @@ function Stat({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#092f38" },
-  safeLight: { flex: 1, backgroundColor: "#f4f7f6" },
+  safe: { flex: 1, backgroundColor: "#07399f" },
+  safeLight: { flex: 1, backgroundColor: "#07399f" },
   loading: {
     alignItems: "center",
-    backgroundColor: "#f4f7f6",
+    backgroundColor: "#07399f",
     flex: 1,
     justifyContent: "center",
   },
-  loginTop: { paddingHorizontal: 28, paddingTop: 48, paddingBottom: 32 },
-  logo: { alignSelf: "center", height: 148, marginBottom: 12, width: "100%" },
+  loginTop: { paddingHorizontal: 25, paddingTop: 38, paddingBottom: 20 },
+  logo: { alignSelf: "center", height: 92, marginBottom: 8, width: 170 },
   eyebrow: {
     color: "#f3d32e",
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 2,
-    marginTop: 36,
+    marginTop: 18,
   },
   eyebrowDark: {
     color: "#0e4db7",
@@ -478,31 +728,30 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 1.4,
   },
-  loginTitle: { color: "#fff", fontSize: 32, fontWeight: "800", marginTop: 12 },
+  loginTitle: { color: "#fff", fontSize: 24, fontWeight: "800", marginTop: 10 },
   loginSubtitle: {
-    color: "#b7d5d5",
-    fontSize: 15,
-    lineHeight: 23,
+    color: "#8eb6ff",
+    fontSize: 12,
+    lineHeight: 18,
     marginTop: 12,
   },
   loginCard: {
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    backgroundColor: "#07399f",
     flex: 1,
-    padding: 28,
+    padding: 25,
   },
   cardTitle: {
-    color: "#12343b",
+    color: "#fff",
     fontSize: 19,
     fontWeight: "800",
     marginBottom: 18,
   },
   input: {
-    borderColor: "#d9e4e3",
-    borderRadius: 13,
+    backgroundColor: "#062c83",
+    borderColor: "#2251ad",
+    borderRadius: 2,
     borderWidth: 1,
-    color: "#12343b",
+    color: "#fff",
     fontSize: 15,
     marginBottom: 12,
     paddingHorizontal: 15,
@@ -510,18 +759,23 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     alignItems: "center",
-    backgroundColor: "#0e4db7",
-    borderRadius: 13,
+    backgroundColor: "#fff000",
+    borderRadius: 2,
     justifyContent: "center",
     marginTop: 8,
     minHeight: 52,
   },
-  primaryButtonText: { color: "#fff", fontSize: 15, fontWeight: "800" },
-  hint: { color: "#94a3b8", fontSize: 10, marginTop: 18, textAlign: "center" },
+  primaryButtonText: {
+    color: "#07399f",
+    fontSize: 13,
+    fontWeight: "900",
+    letterSpacing: 1.4,
+  },
+  hint: { color: "#6f9bdc", fontSize: 9, marginTop: 18, textAlign: "center" },
   home: {
     alignSelf: "center",
     maxWidth: 720,
-    padding: 22,
+    padding: 18,
     paddingBottom: 42,
     width: "100%",
   },
@@ -531,31 +785,42 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 24,
   },
-  greeting: { color: "#12343b", fontSize: 27, fontWeight: "800", marginTop: 6 },
+  greeting: { color: "#fff", fontSize: 24, fontWeight: "800", marginTop: 6 },
+  profileLink: {
+    color: "#8eb6ff",
+    fontSize: 11,
+    fontWeight: "800",
+    marginTop: 6,
+  },
   logoutButton: {
-    borderColor: "#d9e4e3",
-    borderRadius: 10,
+    borderColor: "#2251ad",
+    borderRadius: 2,
     borderWidth: 1,
     paddingHorizontal: 14,
     paddingVertical: 9,
   },
-  logoutText: { color: "#64748b", fontSize: 12, fontWeight: "700" },
-  statusPanel: { backgroundColor: "#12343b", borderRadius: 22, padding: 22 },
-  statusOnline: { backgroundColor: "#0e4db7" },
+  logoutText: { color: "#8eb6ff", fontSize: 12, fontWeight: "700" },
+  statusPanel: { backgroundColor: "#062c83", borderRadius: 2, padding: 18 },
+  statusOnline: { backgroundColor: "#062c83" },
   statusRow: {
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
   },
   statusLabel: {
-    color: "#b7d5d5",
+    color: "#6f9bdc",
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 1.4,
   },
-  statusValue: { color: "#fff", fontSize: 22, fontWeight: "800", marginTop: 8 },
+  statusValue: {
+    color: "#fff000",
+    fontSize: 22,
+    fontWeight: "900",
+    marginTop: 8,
+  },
   statusDescription: {
-    color: "#d5eeee",
+    color: "#8eb6ff",
     fontSize: 12,
     lineHeight: 18,
     marginTop: 7,
@@ -563,9 +828,9 @@ const styles = StyleSheet.create({
   },
   locationCard: {
     alignItems: "center",
-    backgroundColor: "#fff",
-    borderColor: "#e1eae8",
-    borderRadius: 18,
+    backgroundColor: "#062c83",
+    borderColor: "#2251ad",
+    borderRadius: 2,
     borderWidth: 1,
     flexDirection: "row",
     marginTop: 16,
@@ -573,29 +838,133 @@ const styles = StyleSheet.create({
   },
   locationIcon: {
     alignItems: "center",
-    backgroundColor: "#e8f0ff",
-    borderRadius: 16,
+    backgroundColor: "#07399f",
+    borderRadius: 28,
     height: 52,
     justifyContent: "center",
     width: 52,
   },
-  locationIconText: { color: "#0e4db7", fontSize: 11, fontWeight: "900" },
+  locationIconText: { color: "#fff000", fontSize: 11, fontWeight: "900" },
   locationContent: { flex: 1, marginLeft: 14 },
   sectionLabel: {
-    color: "#0e4db7",
+    color: "#8eb6ff",
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 1.1,
   },
   locationCity: {
-    color: "#12343b",
+    color: "#fff",
     fontSize: 15,
     fontWeight: "800",
     marginTop: 6,
   },
-  coordinates: { color: "#64748b", fontSize: 11, marginTop: 4 },
-  liveText: { color: "#0e4db7", fontSize: 11, fontWeight: "700", marginTop: 8 },
+  coordinates: { color: "#6f9bdc", fontSize: 11, marginTop: 4 },
+  liveText: { color: "#fff000", fontSize: 11, fontWeight: "700", marginTop: 8 },
   statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 16 },
+  quickGrid: { flexDirection: "row", gap: 10, marginTop: 16 },
+  quickCard: {
+    backgroundColor: "#062c83",
+    borderColor: "#2251ad",
+    borderWidth: 1,
+    flex: 1,
+    minHeight: 96,
+    padding: 14,
+  },
+  quickIcon: { color: "#fff000", fontSize: 20, fontWeight: "900" },
+  quickTitle: { color: "#fff", fontSize: 14, fontWeight: "900", marginTop: 7 },
+  quickSubtitle: { color: "#6f9bdc", fontSize: 9, marginTop: 4 },
+  availabilityHero: {
+    alignItems: "center",
+    backgroundColor: "#062c83",
+    borderColor: "#2251ad",
+    borderWidth: 1,
+    minHeight: 260,
+    padding: 20,
+  },
+  availabilityActive: { backgroundColor: "#062c83" },
+  availabilityRing: {
+    alignItems: "center",
+    borderColor: "#1749a9",
+    borderRadius: 58,
+    borderWidth: 5,
+    height: 116,
+    justifyContent: "center",
+    width: 116,
+  },
+  availabilityBusy: { borderColor: "#3468c5" },
+  availabilityCore: {
+    alignItems: "center",
+    borderColor: "#3767be",
+    borderRadius: 43,
+    borderWidth: 1,
+    height: 86,
+    justifyContent: "center",
+    width: 86,
+  },
+  availabilityCoreActive: {
+    backgroundColor: "#fff000",
+    borderColor: "#fff000",
+  },
+  availabilityCoreLoading: {
+    backgroundColor: "#1648a4",
+    borderColor: "#4a78ce",
+  },
+  availabilityPin: { color: "#fff000", fontSize: 27, lineHeight: 27 },
+  availabilityPinActive: { color: "#07399f" },
+  availabilityHint: {
+    color: "#8eb6ff",
+    fontSize: 7,
+    fontWeight: "800",
+    marginTop: 4,
+  },
+  availabilityHintActive: { color: "#07399f" },
+  availabilityTitle: {
+    color: "#fff000",
+    fontSize: 16,
+    fontWeight: "900",
+    marginTop: 17,
+  },
+  availabilityDescription: { color: "#6f9bdc", fontSize: 10, marginTop: 5 },
+  availabilityLocation: {
+    color: "#fff000",
+    fontSize: 10,
+    marginTop: 16,
+    textAlign: "center",
+  },
+  statusListCard: {
+    backgroundColor: "#062c83",
+    borderColor: "#2251ad",
+    borderWidth: 1,
+    marginTop: 16,
+    padding: 14,
+  },
+  statusListTitle: {
+    color: "#6f9bdc",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1.3,
+    marginBottom: 9,
+  },
+  statusOption: {
+    alignItems: "center",
+    borderColor: "#1749a9",
+    borderWidth: 1,
+    flexDirection: "row",
+    marginBottom: 7,
+    minHeight: 38,
+    paddingHorizontal: 12,
+  },
+  statusOptionActive: { backgroundColor: "#183e83", borderColor: "#fff000" },
+  statusDot: { borderRadius: 5, height: 8, width: 8 },
+  statusOptionText: {
+    color: "#8eb6ff",
+    flex: 1,
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    marginLeft: 10,
+  },
+  statusCheck: { color: "#fff000", fontSize: 16, fontWeight: "900" },
   stat: {
     backgroundColor: "#fff",
     borderColor: "#e1eae8",
@@ -619,23 +988,134 @@ const styles = StyleSheet.create({
     marginTop: 9,
   },
   infoCard: {
-    backgroundColor: "#eef4ff",
-    borderRadius: 18,
+    backgroundColor: "#062c83",
+    borderColor: "#2251ad",
+    borderRadius: 2,
+    borderWidth: 1,
     marginTop: 16,
     padding: 18,
   },
-  infoText: { color: "#35605e", fontSize: 12, lineHeight: 19 },
+  infoText: { color: "#8eb6ff", fontSize: 12, lineHeight: 19 },
   settingsButton: {
-    borderColor: "#9ab8ed",
-    borderRadius: 11,
+    borderColor: "#4274cf",
+    borderRadius: 2,
     borderWidth: 1,
     marginTop: 15,
     padding: 12,
   },
   settingsButtonText: {
-    color: "#0e4db7",
+    color: "#fff000",
     fontSize: 12,
     fontWeight: "800",
     textAlign: "center",
   },
+  dataSafe: { backgroundColor: "#07399f", flex: 1 },
+  dataScreen: {
+    alignSelf: "center",
+    maxWidth: 720,
+    padding: 22,
+    paddingBottom: 42,
+    width: "100%",
+  },
+  dataHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    marginBottom: 26,
+  },
+  backButton: {
+    alignItems: "center",
+    height: 38,
+    justifyContent: "center",
+    width: 38,
+  },
+  backButtonText: {
+    color: "#b9d5ff",
+    fontSize: 34,
+    fontWeight: "300",
+    lineHeight: 34,
+  },
+  dataHeaderCopy: { marginLeft: 4 },
+  dataEyebrow: {
+    color: "#8eb6ff",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1.8,
+  },
+  dataTitle: { color: "#fff", fontSize: 23, fontWeight: "800", marginTop: 3 },
+  profileHero: {
+    alignItems: "center",
+    backgroundColor: "#062c83",
+    borderColor: "#2251ad",
+    borderRadius: 3,
+    borderWidth: 1,
+    flexDirection: "row",
+    marginBottom: 24,
+    padding: 18,
+  },
+  profileAvatar: {
+    alignItems: "center",
+    backgroundColor: "#fff000",
+    borderRadius: 30,
+    height: 58,
+    justifyContent: "center",
+    width: 58,
+  },
+  profileAvatarText: { color: "#07399f", fontSize: 25, fontWeight: "900" },
+  profileHeroCopy: { marginLeft: 15 },
+  profileName: { color: "#fff", fontSize: 17, fontWeight: "800" },
+  profileRole: {
+    color: "#8eb6ff",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1.4,
+    marginTop: 5,
+  },
+  dataSectionLabel: {
+    color: "#8eb6ff",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1.6,
+    marginBottom: 8,
+    marginTop: 16,
+  },
+  dataCard: {
+    backgroundColor: "#062c83",
+    borderColor: "#2251ad",
+    borderRadius: 3,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+  },
+  dataRow: {
+    borderBottomColor: "#1b499f",
+    borderBottomWidth: 1,
+    paddingVertical: 14,
+  },
+  dataRowLabel: {
+    color: "#6f9bdc",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+  },
+  dataRowValue: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "800",
+    marginTop: 6,
+  },
+  dataRowAccent: { color: "#fff000" },
+  historyCard: {
+    alignItems: "center",
+    backgroundColor: "#062c83",
+    borderColor: "#2251ad",
+    borderWidth: 1,
+    flexDirection: "row",
+    marginBottom: 10,
+    padding: 14,
+  },
+  historyDot: { borderRadius: 6, height: 12, width: 12 },
+  historyCopy: { flex: 1, marginLeft: 12 },
+  historyStatus: { color: "#fff", fontSize: 11, fontWeight: "900" },
+  historyPlace: { color: "#8eb6ff", fontSize: 11, marginTop: 5 },
+  historyTime: { color: "#6f9bdc", fontSize: 10 },
 });
