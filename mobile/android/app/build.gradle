@@ -132,6 +132,14 @@ android {
     }
 }
 
+android.applicationVariants.all { variant ->
+    variant.outputs.all { output ->
+        def version = variant.versionName
+        def code = variant.versionCode
+        output.outputFileName = "next-driver-motoristas-v${version}-${code}.apk"
+    }
+}
+
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:
 // android.packagingOptions.pickFirsts=/LICENSE,**/picasa.ini
