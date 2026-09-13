@@ -10,11 +10,8 @@ primary_region = 'gru'
   dockerfile = 'Dockerfile'
 
 [env]
-  DATABASE_URL = 'file:/data/acneto.db'
-  AUTH_SECRET = 'troque-por-uma-chave-forte-no-fly-secrets'
   ADMIN_EMAIL = 'admin@acnetotransportes.com'
   ADMIN_NAME = 'Administrador'
-  ADMIN_PASSWORD = 'admin123456789'
   CORS_ORIGINS = 'https://nextdriver.fly.dev,http://localhost:5173,http://127.0.0.1:5173'
   VITE_API_URL = 'https://acneto-api-red-log-1872.fly.dev'
 

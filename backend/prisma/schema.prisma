@@ -72,6 +72,25 @@ model Driver {
   @@index([availabilitySince])
 }
 
+model OperationalLocation {
+  id          String   @id @default(cuid())
+  kind        String   // collection_point or final_customer
+  name        String
+  email       String?
+  phone       String?
+  address     String?
+  city        String?
+  state       String?
+  latitude    Float?
+  longitude   Float?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([kind, active])
+  @@index([city, state])
+}
+
 model AccountChangeRequest {
   id               String   @id @default(cuid())
   userId           String

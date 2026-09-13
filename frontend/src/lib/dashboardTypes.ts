@@ -4,6 +4,7 @@ export type AccessLevel = "cliente" | "operador" | "admin";
 
 export type DemoContact = {
   id: string;
+  kind?: "collection_point" | "final_customer";
   name: string;
   email: string;
   region: string;
@@ -11,6 +12,9 @@ export type DemoContact = {
   status: "ativo" | "pendente";
   latitude: number | null;
   longitude: number | null;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
 };
 
 export type PendingUser = {

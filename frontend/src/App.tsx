@@ -26,6 +26,8 @@ import {
   Phone,
   Star,
   UsersRound,
+  Factory,
+  Flag,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import type {
@@ -128,6 +130,12 @@ function RoleDashboard({
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [region, setRegion] = useState("");
+  const [locationKind, setLocationKind] = useState<
+    "collection_point" | "final_customer"
+  >("final_customer");
+  const [locationAddress, setLocationAddress] = useState("");
+  const [locationLatitude, setLocationLatitude] = useState("");
+  const [locationLongitude, setLocationLongitude] = useState("");
   const [accessLevel, setAccessLevel] = useState<AccessLevel>(
     role === "admin" ? "operador" : "cliente",
   );
@@ -210,6 +218,18 @@ function RoleDashboard({
               drivers: DemoDriver[];
               all_drivers: DemoDriver[];
               operators: DirectoryOperator[];
+              locations: Array<{
+                id: string;
+                kind: "collection_point" | "final_customer";
+                name: string;
+                email: string | null;
+                phone: string | null;
+                address: string | null;
+                city: string | null;
+                state: string | null;
+                latitude: number | null;
+                longitude: number | null;
+              }>;
             }>,
         )
         .then(
@@ -217,10 +237,28 @@ function RoleDashboard({
             drivers: apiDrivers,
             all_drivers: apiAllDrivers,
             operators: apiOperators,
+            locations = [],
           }) => {
             setDrivers(apiDrivers);
             setDirectoryDrivers(apiAllDrivers);
             setDirectoryOperators(apiOperators);
+            setClients((current) => {
+              if (!locations.length) return current;
+              return locations.map((location) => ({
+                id: location.id,
+                kind: location.kind,
+                name: location.name,
+                email: location.email ?? "",
+                region: location.city ?? location.state ?? "",
+                accessLevel: "cliente" as const,
+                status: "ativo" as const,
+                latitude: location.latitude,
+                longitude: location.longitude,
+                address: location.address,
+                city: location.city,
+                state: location.state,
+              }));
+            });
           },
         );
     }
@@ -240,6 +278,18 @@ function RoleDashboard({
                 drivers: DemoDriver[];
                 all_drivers: DemoDriver[];
                 operators: DirectoryOperator[];
+                locations: Array<{
+                  id: string;
+                  kind: "collection_point" | "final_customer";
+                  name: string;
+                  email: string | null;
+                  phone: string | null;
+                  address: string | null;
+                  city: string | null;
+                  state: string | null;
+                  latitude: number | null;
+                  longitude: number | null;
+                }>;
               }>,
           )
           .then(
@@ -247,10 +297,29 @@ function RoleDashboard({
               drivers: apiDrivers,
               all_drivers: apiAllDrivers,
               operators: apiOperators,
+              locations = [],
             }) => {
               setDrivers(apiDrivers);
               setDirectoryDrivers(apiAllDrivers);
               setDirectoryOperators(apiOperators);
+              if (locations.length) {
+                setClients(
+                  locations.map((location) => ({
+                    id: location.id,
+                    kind: location.kind,
+                    name: location.name,
+                    email: location.email ?? "",
+                    region: location.city ?? location.state ?? "",
+                    accessLevel: "cliente" as const,
+                    status: "ativo" as const,
+                    latitude: location.latitude,
+                    longitude: location.longitude,
+                    address: location.address,
+                    city: location.city,
+                    state: location.state,
+                  })),
+                );
+              }
             },
           );
       } else {
@@ -500,42 +569,68 @@ function RoleDashboard({
     const selectedClients = clients.filter((client) =>
       selectedClientIds.includes(client.id),
     );
+    const collectionPoint = selectedClients.find(
+      (client) => client.kind === "collection_point",
+    );
+    const finalCustomer = selectedClients.find(
+      (client) => client.kind === "final_customer",
+    );
     if (
       !selectedDriver ||
       selectedDriver.latitude == null ||
       selectedDriver.longitude == null ||
-      selectedClients.length === 0
+      !collectionPoint ||
+      !finalCustomer
     ) {
-      setRouteError("Selecione um motorista com GPS e pelo menos um cliente.");
+      setRouteError("Selecione um posto de coleta e um cliente final com GPS.");
       return;
     }
 
     setRouteLoading(true);
     setRouteError("");
     try {
+      const isDemoRoute = [
+        selectedDriver.id,
+        collectionPoint.id,
+        finalCustomer.id,
+      ].some((id) => id.includes("demo"));
       const waypoints = [
         [selectedDriver.longitude, selectedDriver.latitude],
-        ...selectedClients.map((client) => [
-          client.longitude as number,
-          client.latitude as number,
-        ]),
+        [collectionPoint.longitude, collectionPoint.latitude],
+        [finalCustomer.longitude, finalCustomer.latitude],
       ];
-      const response = await fetch(
-        `https://router.project-osrm.org/route/v1/driving/${waypoints
-          .map(([longitude, latitude]) => `${longitude},${latitude}`)
-          .join(";")}?overview=full&geometries=geojson&steps=false`,
-      );
+      const response = isDemoRoute
+        ? await fetch(
+            `https://router.project-osrm.org/route/v1/driving/${waypoints
+              .map(([longitude, latitude]) => `${longitude},${latitude}`)
+              .join(";")}?overview=full&geometries=geojson&steps=false`,
+          )
+        : await apiFetch("/api/operations/routes", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
+            },
+            body: JSON.stringify({
+              driverId: selectedDriver.id,
+              collectionPointId: collectionPoint.id,
+              finalCustomerId: finalCustomer.id,
+            }),
+          });
       if (!response.ok) throw new Error("Rota indisponível");
       const body = (await response.json()) as {
-        code: string;
+        code?: string;
+        distance: number;
+        duration: number;
+        geometry: { coordinates: number[][] };
         routes?: Array<{
           distance: number;
           duration: number;
           geometry: { coordinates: number[][] };
         }>;
       };
-      const route = body.routes?.[0];
-      if (body.code !== "Ok" || !route) throw new Error("Rota indisponível");
+      const route = body.routes?.[0] ?? body;
+      if (body.code && body.code !== "Ok") throw new Error("Rota indisponível");
       setRoutePath(
         route.geometry.coordinates.map(
           ([longitude, latitude]) => [latitude, longitude] as LatLngTuple,
@@ -578,8 +673,40 @@ function RoleDashboard({
     setRouteError("");
   }, [filteredDrivers, selectedDriverId]);
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (!name.trim() || !email.trim()) return;
+
+    if (
+      accessLevel === "cliente" &&
+      localStorage.getItem("acneto-access-token")
+    ) {
+      const response = await apiFetch("/api/operations/locations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
+        },
+        body: JSON.stringify({
+          kind: locationKind,
+          name: name.trim(),
+          email: email.trim(),
+          address: locationAddress.trim(),
+          city: region.trim(),
+          latitude: locationLatitude ? Number(locationLatitude) : null,
+          longitude: locationLongitude ? Number(locationLongitude) : null,
+        }),
+      });
+      if (!response.ok) return;
+      const body = (await response.json()) as { location: DemoContact };
+      setClients((items) => [body.location, ...items]);
+      setName("");
+      setEmail("");
+      setRegion("");
+      setLocationAddress("");
+      setLocationLatitude("");
+      setLocationLongitude("");
+      return;
+    }
 
     const newEntry: DemoContact = {
       id: `${Date.now()}`,
@@ -617,6 +744,9 @@ function RoleDashboard({
     setName("");
     setEmail("");
     setRegion("");
+    setLocationAddress("");
+    setLocationLatitude("");
+    setLocationLongitude("");
     setAccessLevel(role === "admin" ? "operador" : "cliente");
   };
 
@@ -1287,6 +1417,44 @@ function RoleDashboard({
                   placeholder="Região"
                   className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                 />
+                {accessLevel === "cliente" && (
+                  <>
+                    <select
+                      value={locationKind}
+                      onChange={(e) =>
+                        setLocationKind(
+                          e.target.value as
+                            | "collection_point"
+                            | "final_customer",
+                        )
+                      }
+                      className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    >
+                      <option value="collection_point">Posto de coleta</option>
+                      <option value="final_customer">Cliente final</option>
+                    </select>
+                    <input
+                      value={locationAddress}
+                      onChange={(e) => setLocationAddress(e.target.value)}
+                      placeholder="Endereço do ponto"
+                      className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
+                    />
+                    <input
+                      value={locationLatitude}
+                      onChange={(e) => setLocationLatitude(e.target.value)}
+                      placeholder="Latitude GPS"
+                      inputMode="decimal"
+                      className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    />
+                    <input
+                      value={locationLongitude}
+                      onChange={(e) => setLocationLongitude(e.target.value)}
+                      placeholder="Longitude GPS"
+                      inputMode="decimal"
+                      className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    />
+                  </>
+                )}
                 <select
                   value={accessLevel}
                   onChange={(e) =>
@@ -1569,7 +1737,10 @@ function truckMarkerIcon(selected: boolean) {
   });
 }
 
-function clientMarkerIcon() {
+function clientMarkerIcon(kind: DemoContact["kind"]) {
+  const isCollectionPoint = kind === "collection_point";
+  const background = isCollectionPoint ? "#0e4db7" : "#d97706";
+  const Icon = isCollectionPoint ? Factory : UsersRound;
   return divIcon({
     className: "client-map-marker",
     iconSize: [38, 38],
@@ -1579,7 +1750,7 @@ function clientMarkerIcon() {
       <div
         style={{
           alignItems: "center",
-          background: "#d97706",
+          background,
           border: "3px solid white",
           borderRadius: "50% 50% 50% 4px",
           boxShadow: "0 3px 8px rgba(15, 23, 42, 0.28)",
@@ -1592,7 +1763,7 @@ function clientMarkerIcon() {
         }}
       >
         <span style={{ transform: "rotate(45deg)", display: "flex" }}>
-          <UsersRound size={20} strokeWidth={2.4} />
+          <Icon size={20} strokeWidth={2.4} />
         </span>
       </div>,
     ),
@@ -1734,7 +1905,7 @@ function LocationMapView({
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <MapPin className="text-[#1052c7]" size={18} />
           <h2 className="text-lg font-bold text-[#0b1d3a]">
             Localização dos motoristas
@@ -1748,7 +1919,7 @@ function LocationMapView({
           <select
             value={cityFilter}
             onChange={(e) => setCityFilter(e.target.value)}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:w-auto"
           >
             {cities.map((city) => (
               <option key={city} value={city}>
@@ -1759,7 +1930,7 @@ function LocationMapView({
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:w-auto"
           >
             <option value="Todos">Todos os status</option>
             <option value="available">Disponível</option>
@@ -1776,9 +1947,9 @@ function LocationMapView({
               setClientSearch(value);
               if (!value.trim()) onClearClientSelection();
             }}
-            placeholder="Buscar cliente"
-            aria-label="Buscar cliente no mapa"
-            className="min-w-44 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            placeholder="Buscar cliente ou posto"
+            aria-label="Buscar cliente ou posto no mapa"
+            className="w-full min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:w-80 sm:flex-none"
           />
         </div>
       </div>
@@ -1838,7 +2009,11 @@ function LocationMapView({
                   key={driver.id}
                   position={driverMarkerPosition(driver, locatedDrivers)}
                   icon={truckMarkerIcon(isSelected)}
-                  eventHandlers={{ click: () => onSelectDriver(driver.id) }}
+                  eventHandlers={{
+                    click: () => onSelectDriver(driver.id),
+                    mouseover: (event) => event.target.openPopup(),
+                    mouseout: (event) => event.target.closePopup(),
+                  }}
                 >
                   <Popup>
                     <strong>{driver.full_name}</strong>
@@ -1858,26 +2033,33 @@ function LocationMapView({
                   client.latitude as number,
                   client.longitude as number,
                 ]}
-                icon={clientMarkerIcon()}
-                eventHandlers={{ click: () => onToggleClient(client.id) }}
+                icon={clientMarkerIcon(client.kind)}
+                eventHandlers={{
+                  click: () => onToggleClient(client.id),
+                  mouseover: (event) => event.target.openPopup(),
+                  mouseout: (event) => event.target.closePopup(),
+                }}
               >
                 <Popup>
                   <strong>{client.name}</strong>
                   <br />
-                  Cliente · {client.region}
+                  {client.kind === "collection_point"
+                    ? "Posto de coleta"
+                    : "Cliente final"}{" "}
+                  · {client.region}
                   <br />
                   {client.email}
                   <br />
                   {selectedClientIds.includes(client.id)
-                    ? "Destino selecionado"
-                    : "Clique para selecionar como destino"}
+                    ? "Ponto selecionado"
+                    : "Clique para selecionar este ponto"}
                 </Popup>
               </Marker>
             ))}
             {routePath.length > 1 && (
               <Polyline
                 positions={routePath}
-                pathOptions={{ color: "#f97316", weight: 5, opacity: 0.85 }}
+                pathOptions={{ color: "#16a34a", weight: 5, opacity: 0.9 }}
               />
             )}
           </MapContainer>
@@ -2049,16 +2231,16 @@ function LocationMapView({
           )}
 
           <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
+            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+              <div className="min-w-0">
                 <h3 className="font-bold text-orange-950">
                   Rota para clientes
                 </h3>
                 <p className="mt-1 text-xs text-orange-800">
-                  Clique nos clientes do mapa para selecionar destinos.
+                  Selecione um posto de coleta e um cliente final no mapa.
                 </p>
               </div>
-              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-orange-800">
+              <span className="shrink-0 whitespace-nowrap rounded-full bg-white px-2.5 py-1 text-xs font-bold text-orange-800">
                 {selectedClientIds.length} destino
                 {selectedClientIds.length === 1 ? "" : "s"}
               </span>
@@ -2081,7 +2263,7 @@ function LocationMapView({
             <button
               type="button"
               onClick={onCalculateRoute}
-              disabled={routeLoading || selectedClientIds.length === 0}
+              disabled={routeLoading || selectedClientIds.length !== 2}
               className="mt-3 w-full rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
               {routeLoading ? "Calculando rota..." : "Calcular rota"}

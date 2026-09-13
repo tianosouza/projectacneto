@@ -99,6 +99,7 @@ const developmentClientData: Array<[string, string, string, number, number]> = [
 const developmentClients: DemoContact[] = developmentClientData.map(
   ([name, email, region, latitude, longitude], index) => ({
     id: `client-demo-${index + 1}`,
+    kind: "final_customer",
     name,
     email,
     region,
@@ -109,24 +110,53 @@ const developmentClients: DemoContact[] = developmentClientData.map(
   }),
 );
 
+const developmentCollectionPoints: DemoContact[] = developmentClientData.map(
+  ([, , region, latitude, longitude], index) => ({
+    id: `collection-demo-${index + 1}`,
+    kind: "collection_point",
+    name: `Posto de Coleta Demo ${region}`,
+    email: `posto.${index + 1}@demo.local`,
+    region,
+    accessLevel: "cliente",
+    status: "ativo",
+    latitude: latitude + 0.018,
+    longitude: longitude + 0.018,
+    address: `Avenida Logística, 100 - ${region}`,
+    city: region,
+  }),
+);
+
+const developmentOperationalLocations = [
+  ...developmentCollectionPoints,
+  ...developmentClients,
+];
+
 export const getDevelopmentClients = (): DemoContact[] => {
   if (typeof window === "undefined") return developmentClients;
   const saved = localStorage.getItem("acneto-clients");
-  if (!saved) return developmentClients;
+  if (!saved) return import.meta.env.DEV ? developmentOperationalLocations : [];
   try {
-    const parsed = JSON.parse(saved) as DemoContact[];
+    const parsed = (JSON.parse(saved) as DemoContact[]).map((client) =>
+      client.id.startsWith("client-demo-") && !client.kind
+        ? { ...client, kind: "final_customer" as const }
+        : client,
+    );
     const productionClients = parsed.filter(
-      (client) => !client.id.startsWith("client-demo-"),
+      (client) =>
+        !client.id.startsWith("client-demo-") &&
+        !client.id.startsWith("collection-demo-"),
     );
     if (!import.meta.env.DEV) return productionClients;
 
     const existingIds = new Set(parsed.map((client) => client.id));
     return [
       ...parsed,
-      ...developmentClients.filter((client) => !existingIds.has(client.id)),
+      ...developmentOperationalLocations.filter(
+        (client) => !existingIds.has(client.id),
+      ),
     ];
   } catch {
-    return developmentClients;
+    return import.meta.env.DEV ? developmentOperationalLocations : [];
   }
 };
 

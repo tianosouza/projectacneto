@@ -163,6 +163,22 @@ const publicDriver = (driver) => ({
   created_at: driver.createdAt.toISOString(),
 });
 
+const publicOperationalLocation = (location) => ({
+  id: location.id,
+  kind: location.kind,
+  name: location.name,
+  email: location.email,
+  phone: location.phone,
+  address: location.address,
+  city: location.city,
+  state: location.state,
+  latitude: location.latitude,
+  longitude: location.longitude,
+  active: location.active,
+  created_at: location.createdAt.toISOString(),
+  updated_at: location.updatedAt.toISOString(),
+});
+
 app.get("/api/health", (_request, response) => response.json({ ok: true }));
 
 app.get("/api/events", async (request, response) => {
@@ -422,6 +438,80 @@ app.get("/api/drivers", auth, async (request, response) => {
   response.json({ drivers: drivers.map(publicDriver) });
 });
 
+const validLocationKinds = ["collection_point", "final_customer"];
+
+const locationPayload = (body = {}) => {
+  const kind = typeof body.kind === "string" ? body.kind.trim() : "";
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const data = {
+    kind,
+    name,
+    email: typeof body.email === "string" ? body.email.trim() || null : null,
+    phone: typeof body.phone === "string" ? body.phone.trim() || null : null,
+    address: typeof body.address === "string" ? body.address.trim() || null : null,
+    city: typeof body.city === "string" ? body.city.trim() || null : null,
+    state: typeof body.state === "string" ? body.state.trim() || null : null,
+    latitude: body.latitude == null ? null : Number(body.latitude),
+    longitude: body.longitude == null ? null : Number(body.longitude),
+    active: body.active !== false,
+  };
+  if (!validLocationKinds.includes(kind)) throw new Error("Tipo de ponto operacional inválido");
+  if (!name) throw new Error("Nome do ponto operacional é obrigatório");
+  if (data.latitude != null && (!Number.isFinite(data.latitude) || data.latitude < -90 || data.latitude > 90)) throw new Error("Latitude inválida");
+  if (data.longitude != null && (!Number.isFinite(data.longitude) || data.longitude < -180 || data.longitude > 180)) throw new Error("Longitude inválida");
+  return data;
+};
+
+app.get("/api/operations/locations", auth, requireOperations, async (_request, response) => {
+  const locations = await prisma.operationalLocation.findMany({ where: { active: true }, orderBy: [{ kind: "asc" }, { name: "asc" }] });
+  response.json({ locations: locations.map(publicOperationalLocation) });
+});
+
+app.post("/api/operations/locations", auth, requireOperations, async (request, response) => {
+  try {
+    const location = await prisma.operationalLocation.create({ data: locationPayload(request.body) });
+    broadcast("operational-location-created");
+    response.status(201).json({ location: publicOperationalLocation(location) });
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : "Ponto operacional inválido" });
+  }
+});
+
+app.patch("/api/operations/locations/:locationId", auth, requireOperations, async (request, response) => {
+  try {
+    const location = await prisma.operationalLocation.update({ where: { id: request.params.locationId }, data: locationPayload(request.body) });
+    broadcast("operational-location-updated");
+    response.json({ location: publicOperationalLocation(location) });
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : "Ponto operacional inválido" });
+  }
+});
+
+app.delete("/api/operations/locations/:locationId", auth, requireOperations, async (request, response) => {
+  await prisma.operationalLocation.update({ where: { id: request.params.locationId }, data: { active: false } });
+  broadcast("operational-location-deleted");
+  response.status(204).end();
+});
+
+app.post("/api/operations/routes", auth, requireOperations, async (request, response) => {
+  const { driverId, collectionPointId, finalCustomerId } = request.body || {};
+  const [driver, collectionPoint, finalCustomer] = await Promise.all([
+    prisma.driver.findUnique({ where: { id: driverId } }),
+    prisma.operationalLocation.findUnique({ where: { id: collectionPointId } }),
+    prisma.operationalLocation.findUnique({ where: { id: finalCustomerId } }),
+  ]);
+  const points = [driver, collectionPoint, finalCustomer];
+  if (!driver || !collectionPoint || !finalCustomer || collectionPoint.kind !== "collection_point" || finalCustomer.kind !== "final_customer") return response.status(400).json({ error: "Motorista, posto de coleta e cliente final são obrigatórios" });
+  if (points.some((point) => !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude))) return response.status(400).json({ error: "Todos os pontos precisam ter coordenadas GPS" });
+  const coordinates = points.map((point) => `${point.longitude},${point.latitude}`).join(";");
+  const routeResponse = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`);
+  if (!routeResponse.ok) return response.status(502).json({ error: "Serviço de rotas indisponível" });
+  const routeBody = await routeResponse.json();
+  const route = routeBody.routes?.[0];
+  if (routeBody.code !== "Ok" || !route) return response.status(422).json({ error: "Não foi possível calcular a rota entre os pontos" });
+  response.json({ order: ["driver", "collection_point", "final_customer"], distance: route.distance, duration: route.duration, geometry: route.geometry });
+});
+
 app.get("/api/operations/directory", auth, requireOperations, async (request, response) => {
   const activeSince = new Date(Date.now() - 2 * 60 * 1000);
   const drivers = await prisma.driver.findMany({
@@ -438,6 +528,7 @@ app.get("/api/operations/directory", auth, requireOperations, async (request, re
       orderBy: { fullName: "asc" },
     })
     : [];
+  const locations = await prisma.operationalLocation.findMany({ where: { active: true }, orderBy: [{ kind: "asc" }, { name: "asc" }] });
 
   response.json({
     drivers: drivers.map(publicDriver),
@@ -449,6 +540,7 @@ app.get("/api/operations/directory", auth, requireOperations, async (request, re
       phone: operator.phone,
       role: operator.profile?.role,
     })),
+    locations: locations.map(publicOperationalLocation),
   });
 });
 
