@@ -22,4 +22,5 @@
 **/*.sln
 **/*.sw?
 **/.env
+!frontend/.env
 fly.toml

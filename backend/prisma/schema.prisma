@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  fullName     String?
+  phone        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  profile Profile?
+  driver  Driver?
+  changeRequests AccountChangeRequest[]
+  passwordResetTokens PasswordResetToken[]
+}
+
+model Profile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  role      String   @default("driver")
+  fullName  String?
+  requestedRole String  @default("driver")
+  registrationNotes String?
+  approved  Boolean  @default(false)
+  approvalClosed Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Driver {
+  id               String    @id @default(cuid())
+  userId           String    @unique
+  fullName         String
+  cpf              String?
+  phone            String?
+  email            String?
+  vehicleModel     String?
+  vehicleYear      Int?
+  capacity         String?
+  compartments     String?
+  plate            String?
+  cnh              String?
+  city             String?
+  state            String?
+  isOnline         Boolean   @default(false)
+  latitude         Float?
+  longitude        Float?
+  lastSeen         DateTime?
+  status           String    @default("offline")
+  notes            String?
+  availabilitySince DateTime?
+  rating           Float     @default(0)
+  totalTrips       Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([isOnline])
+  @@index([city, state])
+  @@index([availabilitySince])
+}
+
+model AccountChangeRequest {
+  id               String   @id @default(cuid())
+  userId           String
+  requestedChanges String
+  status           String   @default("pending")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}

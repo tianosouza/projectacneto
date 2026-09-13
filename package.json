@@ -5,18 +5,33 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "node backend/server/index.mjs",
+    "start": "node backend/server/index.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json"
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "db:generate": "prisma generate --schema backend/prisma/schema.prisma",
+    "db:validate": "prisma validate --schema backend/prisma/schema.prisma",
+    "db:push": "prisma db push --schema backend/prisma/schema.prisma",
+    "db:studio": "prisma studio --schema backend/prisma/schema.prisma",
+    "db:seed": "prisma db seed --schema backend/prisma/schema.prisma",
+    "db:register-driver": "node backend/prisma/register-driver.mjs"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.0",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "leaflet": "^1.9.4",
     "lucide-react": "^0.446.0",
+    "prisma": "^6.19.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-leaflet": "^4.2.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
+    "@types/leaflet": "^1.9.22",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
@@ -30,5 +45,8 @@
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.3.0",
     "vite": "^5.4.2"
+  },
+  "prisma": {
+    "seed": "node backend/prisma/seed.mjs"
   }
 }

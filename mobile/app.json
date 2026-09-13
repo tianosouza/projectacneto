@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "Next Driver para Motoristas",
+    "slug": "next-driver-motoristas",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "acneto",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "android": {
+      "package": "br.com.acneto.motorista",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION"
+      ]
+    },
+    "ios": {
+      "bundleIdentifier": "br.com.acneto.motorista",
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "location"
+        ],
+        "NSLocationWhenInUseUsageDescription": "O Next Driver usa sua localização para mostrar sua posição aos operadores enquanto você está online.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "O Next Driver continua atualizando sua posição em segundo plano enquanto você está online."
+      }
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "locationAlwaysAndWhenInUsePermission": "Permita que o Next Driver acompanhe sua posição enquanto você estiver online."
+        }
+      ]
+    ]
+  }
+}

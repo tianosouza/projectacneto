@@ -21,3 +21,9 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.env.*
+!.env.example
+backend/prisma/*.db
+backend/prisma/*.db-journal
+backend/*.db
+backend/*.db-journal
