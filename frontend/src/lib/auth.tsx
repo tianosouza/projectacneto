@@ -62,12 +62,14 @@ const apiProfile = (profile: {
   role: string;
   fullName: string | null;
   createdAt: string;
+  mustChangePassword?: boolean;
 }): Profile => ({
   id: profile.id,
   user_id: profile.userId,
   role: profile.role as UserRole,
   full_name: profile.fullName,
   created_at: profile.createdAt,
+  must_change_password: profile.mustChangePassword,
 });
 
 type AuthContextValue = {
@@ -84,14 +86,37 @@ type AuthContextValue = {
     password: string,
     fullName: string,
     phone: string,
-    requestedRole: "driver" | "operator",
+    requestedRole: "driver" | "carrier",
     registrationNotes: string,
+    company?: {
+      legalName: string;
+      cnpj: string;
+      stateRegistration?: string;
+      address: string;
+    },
+    driver?: {
+      cpf?: string;
+      vehicleModel?: string;
+      vehicleYear?: number;
+      capacity?: string;
+      compartments?: string;
+      plate?: string;
+      cnh?: string;
+      cnhCategory?: string;
+      cnhExpiresAt?: string;
+      city?: string;
+      state?: string;
+      locationSharingAuthorized?: boolean;
+    },
   ) => Promise<{ error: string | null; pending?: boolean }>;
   requestPasswordReset: (
     email: string,
   ) => Promise<{ error: string | null; resetToken?: string }>;
   resetPassword: (
     token: string,
+    password: string,
+  ) => Promise<{ error: string | null }>;
+  changeInitialPassword: (
     password: string,
   ) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
@@ -175,8 +200,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     password: string,
     fullName: string,
     phone: string,
-    requestedRole: "driver" | "operator",
+    requestedRole: "driver" | "carrier",
     registrationNotes: string,
+    company?: {
+      legalName: string;
+      cnpj: string;
+      stateRegistration?: string;
+      address: string;
+    },
+    driver?: {
+      cpf?: string;
+      vehicleModel?: string;
+      vehicleYear?: number;
+      capacity?: string;
+      compartments?: string;
+      plate?: string;
+      cnh?: string;
+      cnhCategory?: string;
+      cnhExpiresAt?: string;
+      city?: string;
+      state?: string;
+      locationSharingAuthorized?: boolean;
+    },
   ) => {
     try {
       const response = await apiFetch("/api/auth/signup", {
@@ -189,6 +234,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           phone,
           requestedRole,
           registrationNotes,
+          company,
+          driver,
         }),
       });
       const body = (await response.json()) as {
@@ -257,6 +304,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const changeInitialPassword = async (password: string) => {
+    try {
+      const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
+      const response = await apiFetch("/api/auth/change-initial-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken ?? ""}`,
+        },
+        body: JSON.stringify({ password }),
+      });
+      const body = (await response.json()) as {
+        error?: string;
+        profile?: Parameters<typeof apiProfile>[0];
+      };
+      if (!response.ok)
+        return { error: body.error ?? "Não foi possível alterar a senha" };
+      if (body.profile) setProfile(apiProfile(body.profile));
+      return { error: null };
+    } catch {
+      return { error: "Servidor indisponível. Tente novamente." };
+    }
+  };
+
   const signOut = async () => {
     if (typeof window !== "undefined") {
       localStorage.removeItem(ACCESS_TOKEN_KEY);
@@ -277,6 +348,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signUp,
         requestPasswordReset,
         resetPassword,
+        changeInitialPassword,
         signOut,
       }}
     >

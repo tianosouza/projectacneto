@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "operator" | "driver";
+export type UserRole = "admin" | "operator" | "driver" | "carrier";
 
 export type Profile = {
   id: string;
@@ -6,6 +6,7 @@ export type Profile = {
   role: UserRole;
   full_name: string | null;
   created_at: string;
+  must_change_password?: boolean;
 };
 
 export type DriverStatus =
@@ -31,8 +32,19 @@ export type Driver = {
   compartments: string | null;
   plate: string | null;
   cnh: string | null;
+  cnh_category?: string | null;
+  cnh_expires_at?: string | null;
   city: string | null;
   state: string | null;
+  homologation_status?:
+    | "in_analysis"
+    | "active"
+    | "rejected"
+    | "blocked"
+    | string;
+  location_sharing_authorized?: boolean;
+  current_vehicle?: Vehicle | null;
+  carrier?: TransportCompany | null;
   is_online: boolean;
   latitude: number | null;
   longitude: number | null;
@@ -43,4 +55,28 @@ export type Driver = {
   rating: number;
   total_trips: number;
   created_at: string;
+};
+
+export type TransportCompany = {
+  id: string;
+  legal_name?: string;
+  name?: string;
+  cnpj: string;
+  state_registration?: string | null;
+  phone?: string;
+  address?: string;
+  email?: string;
+  status: string;
+};
+
+export type Vehicle = {
+  id: string;
+  type: string;
+  plate: string;
+  capacity: string | null;
+  compartments: string | null;
+  product_type: string | null;
+  homologation_status: string;
+  company: TransportCompany | null;
+  products: string[];
 };

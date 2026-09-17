@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Linking,
   SafeAreaView,
   ScrollView,
@@ -97,15 +98,12 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }) => {
   }
 });
 
-async function startLocationTracking(): Promise<"background" | "foreground"> {
+async function startLocationTracking(): Promise<"foreground"> {
   const foreground = await Location.requestForegroundPermissionsAsync();
   if (foreground.status !== "granted") {
     throw new Error("Permissão de localização em primeiro plano negada.");
   }
 
-  // Use the foreground watcher as the stable path. Starting the Android
-  // background service immediately after the permission dialog can crash
-  // some devices and leave a second native subscription behind.
   foregroundSubscription?.remove();
   foregroundSubscription = await Location.watchPositionAsync(
     {
@@ -147,6 +145,23 @@ export default function App() {
   useEffect(() => {
     void restoreSession();
   }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", async (state) => {
+      // Só retoma o rastreamento ao voltar ao primeiro plano, e apenas se
+      // ele ainda não estiver ativo, evitando pedidos de permissão duplicados.
+      if (state === "active" && driver?.is_online && token && !trackingMode) {
+        try {
+          const mode = await startLocationTracking();
+          setTrackingMode(mode);
+        } catch {
+          setTrackingMode(null);
+        }
+      }
+    });
+
+    return () => subscription.remove();
+  }, [driver?.is_online, token, trackingMode]);
 
   async function restoreSession() {
     try {
@@ -495,7 +510,6 @@ function DriverHome({
             <Text style={styles.quickSubtitle}>Últimas sinalizações</Text>
           </TouchableOpacity>
         </View>
-
       </ScrollView>
     </SafeAreaView>
   );

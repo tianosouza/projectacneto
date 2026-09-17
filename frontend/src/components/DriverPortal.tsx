@@ -25,6 +25,7 @@ import { useAuth } from "@/lib/auth";
 import type { Driver } from "@/lib/types";
 import { AccountCenter } from "@/components/AccountCenter";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { AppDownloadButton } from "@/components/AppDownloadButton";
 import { apiFetch } from "@/lib/api";
 
 type Tab = "home" | "profile" | "history" | "settings";
@@ -490,6 +491,7 @@ function TopBar({
         </div>
         <div className="flex items-center gap-3">
           <ThemeToggle />
+          <AppDownloadButton />
           <div
             className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
               driver.is_online

@@ -1,33 +1,110 @@
-import { useState } from "react";
-import { Mail, Lock, User, Phone, Eye, EyeOff, ArrowRight } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  Mail,
+  Lock,
+  User,
+  Phone,
+  Eye,
+  EyeOff,
+  ArrowRight,
+  Building2,
+  MapPin,
+  IdCard,
+  CalendarDays,
+  Truck,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 export function AuthScreen() {
   const { signIn, signUp, requestPasswordReset, resetPassword } = useAuth();
-  const [mode, setMode] = useState<"signin" | "signup" | "forgot" | "reset">(
-    "signin",
-  );
+  const [mode, setMode] = useState<"signin" | "forgot" | "reset">("signin");
+  const [signupOpen, setSignupOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
+  const [driver, setDriver] = useState({
+    cpf: "",
+    vehicleModel: "",
+    vehicleYear: "",
+    capacity: "",
+    compartments: "",
+    plate: "",
+    cnh: "",
+    cnhCategory: "",
+    cnhExpiresAt: "",
+    city: "",
+    state: "",
+    locationSharingAuthorized: false,
+  });
   const [resetToken, setResetToken] = useState("");
   const [resetPasswordValue, setResetPasswordValue] = useState("");
-  const [requestedRole, setRequestedRole] = useState<"driver" | "operator">(
+  const [registrationNotes, setRegistrationNotes] = useState("");
+  const [requestedRole, setRequestedRole] = useState<"driver" | "carrier">(
     "driver",
   );
-  const [registrationNotes, setRegistrationNotes] = useState("");
+  const [company, setCompany] = useState({
+    legalName: "",
+    cnpj: "",
+    stateRegistration: "",
+    address: "",
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [registrationSent, setRegistrationSent] = useState(false);
 
+  useEffect(() => {
+    if (!signupOpen) return;
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, [signupOpen]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
+
+    if (signupOpen) {
+      if (password.length < 6) {
+        setError("A senha deve ter no mínimo 6 caracteres.");
+        setSubmitting(false);
+        return;
+      }
+      const result = await signUp(
+        email,
+        password,
+        fullName,
+        phone,
+        requestedRole,
+        registrationNotes,
+        requestedRole === "carrier" ? company : undefined,
+        requestedRole === "driver"
+          ? {
+              ...driver,
+              vehicleYear: driver.vehicleYear
+                ? Number(driver.vehicleYear)
+                : undefined,
+            }
+          : undefined,
+      );
+      if (result.pending) {
+        setSignupOpen(false);
+        setRegistrationSent(true);
+      } else if (result.error) {
+        setError(result.error);
+      }
+      setSubmitting(false);
+      return;
+    }
 
     if (mode === "forgot") {
       const result = await requestPasswordReset(email);
@@ -64,25 +141,6 @@ export function AuthScreen() {
     if (mode === "signin") {
       const { error: err } = await signIn(email, password);
       if (err) setError(err);
-    } else {
-      if (password.length < 6) {
-        setError("A senha deve ter no mínimo 6 caracteres.");
-        setSubmitting(false);
-        return;
-      }
-      const result = await signUp(
-        email,
-        password,
-        fullName,
-        phone,
-        requestedRole,
-        registrationNotes,
-      );
-      if (result.pending) {
-        setRegistrationSent(true);
-      } else if (result.error) {
-        setError(result.error);
-      }
     }
     setSubmitting(false);
   };
@@ -155,96 +213,20 @@ export function AuthScreen() {
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-2xl sm:p-8">
-            <div className="mb-6 flex rounded-xl bg-slate-100 p-1">
-              <button
-                onClick={() => {
-                  setMode("signin");
-                  setError(null);
-                }}
-                className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
-                  mode === "signin"
-                    ? "bg-white text-[#0b1d3a] shadow-sm"
-                    : "text-slate-500"
-                }`}
-              >
-                Entrar
-              </button>
-              <button
-                onClick={() => {
-                  setMode("signup");
-                  setError(null);
-                }}
-                className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
-                  mode === "signup"
-                    ? "bg-white text-[#0b1d3a] shadow-sm"
-                    : "text-slate-500"
-                }`}
-              >
-                Criar conta
-              </button>
-            </div>
-
             <h2 className="text-xl font-bold text-[#0b1d3a]">
               {mode === "signin"
                 ? "Bem-vindo de volta"
-                : mode === "signup"
-                  ? "Crie sua conta"
-                  : mode === "forgot"
-                    ? "Recuperar senha"
-                    : "Definir nova senha"}
+                : mode === "forgot"
+                  ? "Recuperar senha"
+                  : "Definir nova senha"}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
               {mode === "signin"
                 ? "Acesse o Next Driver com seus dados."
-                : mode === "signup"
-                  ? "Cadastre-se para começar a receber fretes."
-                  : "Use um código válido e uma senha nova para proteger sua conta."}
+                : "Use um código válido e uma senha nova para proteger sua conta."}
             </p>
 
             <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-              {mode === "signup" && (
-                <>
-                  <InputField
-                    icon={User}
-                    type="text"
-                    placeholder="Nome completo"
-                    value={fullName}
-                    onChange={setFullName}
-                    required
-                  />
-                  <InputField
-                    icon={Phone}
-                    type="tel"
-                    placeholder="Telefone / WhatsApp"
-                    value={phone}
-                    onChange={setPhone}
-                    required
-                  />
-                  <select
-                    value={requestedRole}
-                    onChange={(event) =>
-                      setRequestedRole(
-                        event.target.value as "driver" | "operator",
-                      )
-                    }
-                    className="w-full rounded-xl border border-slate-200 px-3 py-3.5 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    aria-label="Tipo de cadastro pretendido"
-                  >
-                    <option value="driver">Pretendo ser motorista</option>
-                    <option value="operator">Pretendo ser operador</option>
-                  </select>
-                  <textarea
-                    value={registrationNotes}
-                    onChange={(event) =>
-                      setRegistrationNotes(event.target.value)
-                    }
-                    placeholder="Observação: conte brevemente sobre o cadastro que pretende realizar"
-                    rows={3}
-                    maxLength={1000}
-                    className="w-full resize-none rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  />
-                </>
-              )}
               {mode !== "reset" && (
                 <InputField
                   icon={Mail}
@@ -313,25 +295,35 @@ export function AuthScreen() {
                   ? "Aguarde..."
                   : mode === "signin"
                     ? "Entrar no portal"
-                    : mode === "signup"
-                      ? "Criar conta"
-                      : mode === "forgot"
-                        ? "Solicitar recuperação"
-                        : "Redefinir senha"}
+                    : mode === "forgot"
+                      ? "Solicitar recuperação"
+                      : "Redefinir senha"}
                 {!submitting && <ArrowRight size={16} />}
               </button>
             </form>
             {mode === "signin" && (
-              <button
-                type="button"
-                onClick={() => {
-                  setMode("forgot");
-                  setError(null);
-                }}
-                className="mt-4 w-full text-sm font-semibold text-[#1052c7] hover:underline"
-              >
-                Esqueci minha senha
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("forgot");
+                    setError(null);
+                  }}
+                  className="mt-4 w-full text-sm font-semibold text-[#1052c7] hover:underline"
+                >
+                  Esqueci minha senha
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSignupOpen(true);
+                    setError(null);
+                  }}
+                  className="mt-3 w-full text-sm font-semibold text-slate-500 hover:text-[#1052c7] hover:underline"
+                >
+                  Ainda não tenho cadastro
+                </button>
+              </>
             )}
             {(mode === "forgot" || mode === "reset") && (
               <button
@@ -348,6 +340,409 @@ export function AuthScreen() {
           </div>
         </div>
       </div>
+      {signupOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-[#07152b]/70 p-2 backdrop-blur-sm sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="signup-modal-title"
+        >
+          <div className="h-[calc(100dvh-1rem)] w-full max-w-5xl overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-2xl [scrollbar-width:none] sm:h-[calc(100dvh-2rem)] sm:p-7 lg:h-auto lg:max-h-[calc(100dvh-2rem)] [&::-webkit-scrollbar]:hidden">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-600">
+                  Novo cadastro
+                </p>
+                <h2
+                  id="signup-modal-title"
+                  className="mt-1 text-2xl font-bold text-[#0b1d3a]"
+                >
+                  Crie seu acesso
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Todos os cadastros passam pela aprovação da operação.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSignupOpen(false)}
+                className="text-2xl leading-none text-slate-400 hover:text-slate-700"
+                aria-label="Fechar cadastro"
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleSubmit} className="mt-4 space-y-2.5">
+              <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => setRequestedRole("driver")}
+                  className={`rounded-lg px-3 py-2 text-sm font-semibold ${requestedRole === "driver" ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
+                >
+                  Motorista
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRequestedRole("carrier")}
+                  className={`rounded-lg px-3 py-2 text-sm font-semibold ${requestedRole === "carrier" ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
+                >
+                  Transportadora
+                </button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <InputField
+                  icon={User}
+                  type="text"
+                  placeholder={
+                    requestedRole === "carrier"
+                      ? "Nome do sócio representante *"
+                      : "Nome completo *"
+                  }
+                  value={fullName}
+                  onChange={setFullName}
+                  required
+                />
+                <InputField
+                  icon={Phone}
+                  type="tel"
+                  placeholder="Celular / WhatsApp *"
+                  value={phone}
+                  onChange={setPhone}
+                  required
+                />
+                <InputField
+                  icon={Mail}
+                  type="email"
+                  placeholder="E-mail *"
+                  value={email}
+                  onChange={setEmail}
+                  required
+                />
+                <InputField
+                  icon={Lock}
+                  type="password"
+                  placeholder="Senha *"
+                  value={password}
+                  onChange={setPassword}
+                  required
+                />
+              </div>
+              {requestedRole === "driver" ? (
+                <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+                  <p className="text-sm font-semibold text-blue-900">
+                    Dados do motorista
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    <InputField
+                      icon={IdCard}
+                      type="text"
+                      placeholder="CPF *"
+                      value={driver.cpf}
+                      onChange={(value) =>
+                        setDriver((current) => ({ ...current, cpf: value }))
+                      }
+                      required
+                    />
+                    <InputField
+                      icon={IdCard}
+                      type="text"
+                      placeholder="CNH *"
+                      value={driver.cnh}
+                      onChange={(value) =>
+                        setDriver((current) => ({ ...current, cnh: value }))
+                      }
+                      required
+                    />
+                    <InputField
+                      icon={IdCard}
+                      type="text"
+                      placeholder="Categoria da CNH *"
+                      value={driver.cnhCategory}
+                      onChange={(value) =>
+                        setDriver((current) => ({
+                          ...current,
+                          cnhCategory: value.toUpperCase(),
+                        }))
+                      }
+                      required
+                    />
+                    <label className="relative flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-500">
+                      <CalendarDays
+                        size={18}
+                        className="shrink-0 text-slate-400"
+                      />
+                      <input
+                        type="date"
+                        value={driver.cnhExpiresAt}
+                        onChange={(event) =>
+                          setDriver((current) => ({
+                            ...current,
+                            cnhExpiresAt: event.target.value,
+                          }))
+                        }
+                        required
+                        className="min-w-0 flex-1 bg-transparent outline-none"
+                      />
+                    </label>
+                    <InputField
+                      icon={MapPin}
+                      type="text"
+                      placeholder="Cidade *"
+                      value={driver.city}
+                      onChange={(value) =>
+                        setDriver((current) => ({ ...current, city: value }))
+                      }
+                      required
+                    />
+                    <InputField
+                      icon={MapPin}
+                      type="text"
+                      placeholder="UF *"
+                      value={driver.state}
+                      onChange={(value) =>
+                        setDriver((current) => ({
+                          ...current,
+                          state: value.toUpperCase(),
+                        }))
+                      }
+                      required
+                    />
+                  </div>
+                  <div className="rounded-xl border border-dashed border-blue-200 bg-white/70 p-3">
+                    <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-blue-800">
+                      <Truck size={15} /> Veículo próprio (obrigatório)
+                    </p>
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      <InputField
+                        icon={Truck}
+                        type="text"
+                        placeholder="Tipo / modelo *"
+                        value={driver.vehicleModel}
+                        onChange={(value) =>
+                          setDriver((current) => ({
+                            ...current,
+                            vehicleModel: value,
+                          }))
+                        }
+                        required
+                      />
+                      <InputField
+                        icon={Truck}
+                        type="text"
+                        placeholder="Ano *"
+                        value={driver.vehicleYear}
+                        onChange={(value) =>
+                          setDriver((current) => ({
+                            ...current,
+                            vehicleYear: value.replace(/\D/g, "").slice(0, 4),
+                          }))
+                        }
+                        required
+                      />
+                      <InputField
+                        icon={Truck}
+                        type="text"
+                        placeholder="Placa *"
+                        value={driver.plate}
+                        onChange={(value) =>
+                          setDriver((current) => ({
+                            ...current,
+                            plate: value.toUpperCase(),
+                          }))
+                        }
+                        required
+                      />
+                      <InputField
+                        icon={Truck}
+                        type="text"
+                        placeholder="Capacidade *"
+                        value={driver.capacity}
+                        onChange={(value) =>
+                          setDriver((current) => ({
+                            ...current,
+                            capacity: value,
+                          }))
+                        }
+                        required
+                      />
+                      <InputField
+                        icon={Truck}
+                        type="text"
+                        placeholder="Compartimentação *"
+                        value={driver.compartments}
+                        onChange={(value) =>
+                          setDriver((current) => ({
+                            ...current,
+                            compartments: value,
+                          }))
+                        }
+                        required
+                      />
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-blue-900">
+                    <input
+                      type="checkbox"
+                      checked={driver.locationSharingAuthorized}
+                      onChange={(event) =>
+                        setDriver((current) => ({
+                          ...current,
+                          locationSharingAuthorized: event.target.checked,
+                        }))
+                      }
+                    />{" "}
+                    Autorizo o compartilhamento da minha localização.
+                  </label>
+                </div>
+              ) : (
+                <div className="space-y-3 rounded-xl border border-amber-100 bg-amber-50 p-4">
+                  <p className="text-sm font-semibold text-amber-900">
+                    Dados da transportadora
+                  </p>
+                  <InputField
+                    icon={Building2}
+                    type="text"
+                    placeholder="Razão social *"
+                    value={company.legalName}
+                    onChange={(value) =>
+                      setCompany((current) => ({
+                        ...current,
+                        legalName: value,
+                      }))
+                    }
+                    required
+                  />
+                  <InputField
+                    icon={Building2}
+                    type="text"
+                    placeholder="CNPJ *"
+                    value={company.cnpj}
+                    onChange={(value) =>
+                      setCompany((current) => ({ ...current, cnpj: value }))
+                    }
+                    required
+                  />
+                  <InputField
+                    icon={Building2}
+                    type="text"
+                    placeholder="Inscrição estadual (opcional)"
+                    value={company.stateRegistration}
+                    onChange={(value) =>
+                      setCompany((current) => ({
+                        ...current,
+                        stateRegistration: value,
+                      }))
+                    }
+                  />
+                  <InputField
+                    icon={MapPin}
+                    type="text"
+                    placeholder="Endereço completo *"
+                    value={company.address}
+                    onChange={(value) =>
+                      setCompany((current) => ({ ...current, address: value }))
+                    }
+                    required
+                  />
+                </div>
+              )}
+              <textarea
+                value={registrationNotes}
+                onChange={(event) => setRegistrationNotes(event.target.value)}
+                placeholder="Observações do cadastro (opcional)"
+                rows={2}
+                maxLength={1000}
+                className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+              {error && (
+                <div className="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  {error}
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={submitting}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0e4db7] py-3.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/20 transition hover:bg-[#0a3a90] disabled:opacity-60"
+              >
+                {submitting ? "Enviando..." : "Enviar cadastro"}
+                {!submitting && <ArrowRight size={16} />}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function InitialPasswordScreen() {
+  const { changeInitialPassword } = useAuth();
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    if (password.length < 8) {
+      setError("A nova senha deve ter no mínimo 8 caracteres.");
+      return;
+    }
+    if (password !== confirmation) {
+      setError("As senhas não coincidem.");
+      return;
+    }
+    setSubmitting(true);
+    const result = await changeInitialPassword(password);
+    if (result.error) setError(result.error);
+    setSubmitting(false);
+  };
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-[#0e4db7] to-[#0a3a90] p-6">
+      <form
+        onSubmit={submit}
+        className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl sm:p-8"
+      >
+        <h1 className="text-xl font-bold text-[#0b1d3a]">
+          Defina sua nova senha
+        </h1>
+        <p className="mt-2 text-sm text-slate-500">
+          Use a senha inicial recebida do administrador apenas no primeiro
+          acesso.
+        </p>
+        <div className="mt-6 space-y-4">
+          <InputField
+            icon={Lock}
+            type="password"
+            placeholder="Nova senha"
+            value={password}
+            onChange={setPassword}
+            required
+          />
+          <InputField
+            icon={Lock}
+            type="password"
+            placeholder="Confirme a nova senha"
+            value={confirmation}
+            onChange={setConfirmation}
+            required
+          />
+          {error && (
+            <div className="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {error}
+            </div>
+          )}
+          <button
+            disabled={submitting}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0e4db7] py-3.5 text-sm font-semibold text-white disabled:opacity-60"
+          >
+            {submitting ? "Salvando..." : "Salvar nova senha"}
+            {!submitting && <ArrowRight size={16} />}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -379,7 +774,7 @@ function InputField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         required={required}
-        className="w-full rounded-xl border border-slate-200 py-3.5 pl-11 pr-4 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+        className="w-full rounded-xl border border-slate-200 py-3 pl-11 pr-4 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
       />
     </div>
   );

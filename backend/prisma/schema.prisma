@@ -18,6 +18,7 @@ model User {
 
   profile Profile?
   driver  Driver?
+  transportCompany TransportCompany? @relation("CompanyAccount")
   changeRequests AccountChangeRequest[]
   passwordResetTokens PasswordResetToken[]
 }
@@ -25,16 +26,21 @@ model User {
 model Profile {
   id        String   @id @default(cuid())
   userId    String   @unique
+  companyId String?
   role      String   @default("driver")
   fullName  String?
   requestedRole String  @default("driver")
   registrationNotes String?
   approved  Boolean  @default(false)
   approvalClosed Boolean @default(false)
+  mustChangePassword Boolean @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company TransportCompany? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, approved])
 }
 
 model Driver {
@@ -50,8 +56,12 @@ model Driver {
   compartments     String?
   plate            String?
   cnh              String?
+  cnhCategory      String?
+  cnhExpiresAt     DateTime?
   city             String?
   state            String?
+  homologationStatus String   @default("in_analysis")
+  locationSharingAuthorized Boolean @default(false)
   isOnline         Boolean   @default(false)
   latitude         Float?
   longitude        Float?
@@ -65,6 +75,11 @@ model Driver {
   updatedAt        DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  ownedVehicles Vehicle[] @relation("OwnedVehicles")
+  vehicleAssignments VehicleDriverAssignment[]
+  carrierLinks DriverCarrierLink[]
+  documents HomologationDocument[]
 
   @@index([status])
   @@index([isOnline])
@@ -115,4 +130,113 @@ model PasswordResetToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, expiresAt])
+}
+
+model TransportCompany {
+  id        String   @id @default(cuid())
+  userId    String?  @unique
+  legalName String
+  cnpj      String   @unique
+  stateRegistration String?
+  phone     String
+  address   String
+  email     String
+  status    String   @default("in_analysis")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  account User? @relation("CompanyAccount", fields: [userId], references: [id], onDelete: SetNull)
+  profiles Profile[]
+  vehicles Vehicle[] @relation("CompanyVehicles")
+  driverLinks DriverCarrierLink[]
+  documents HomologationDocument[]
+
+  @@index([status])
+}
+
+model Vehicle {
+  id          String   @id @default(cuid())
+  companyId   String?
+  ownerDriverId String?
+  type        String
+  plate       String   @unique
+  capacity    String?
+  compartments String?
+  productType String?
+  homologationStatus String @default("in_analysis")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company     TransportCompany? @relation("CompanyVehicles", fields: [companyId], references: [id], onDelete: SetNull)
+  ownerDriver Driver? @relation("OwnedVehicles", fields: [ownerDriverId], references: [id], onDelete: SetNull)
+  driverAssignments VehicleDriverAssignment[]
+  products    VehicleProduct[]
+  documents HomologationDocument[]
+
+  @@index([companyId])
+  @@index([ownerDriverId])
+  @@index([homologationStatus])
+}
+
+model VehicleDriverAssignment {
+  id        String   @id @default(cuid())
+  vehicleId String
+  driverId  String
+  startedAt DateTime @default(now())
+  endedAt   DateTime?
+  status    String   @default("active")
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  driver  Driver  @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId, endedAt])
+  @@index([driverId, endedAt])
+}
+
+model DriverCarrierLink {
+  id        String   @id @default(cuid())
+  driverId  String
+  companyId String
+  startedAt DateTime @default(now())
+  endedAt   DateTime?
+  status    String   @default("active")
+
+  driver  Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  company TransportCompany @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([driverId, endedAt])
+  @@index([companyId, endedAt])
+}
+
+model VehicleProduct {
+  id        String   @id @default(cuid())
+  vehicleId String
+  product   String
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@unique([vehicleId, product])
+}
+
+model HomologationDocument {
+  id          String   @id @default(cuid())
+  driverId    String?
+  vehicleId   String?
+  companyId   String?
+  documentType String
+  fileName    String?
+  status      String   @default("pending")
+  expiresAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  driver  Driver? @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  company TransportCompany? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([driverId, status])
+  @@index([vehicleId, status])
+  @@index([companyId, status])
 }

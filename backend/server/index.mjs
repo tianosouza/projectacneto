@@ -119,7 +119,18 @@ const auth = async (request, response, next) => {
     const header = request.get("authorization") || "";
     const payload = header.startsWith("Bearer ") ? decodeToken(header.slice(7)) : null;
     if (!payload?.sub) return response.status(401).json({ error: "Não autenticado" });
-    const user = await prisma.user.findUnique({ where: { id: payload.sub }, include: { profile: true, driver: true } });
+    const user = await prisma.user.findUnique({
+      where: { id: payload.sub },
+      include: {
+        profile: { include: { company: true } },
+        driver: {
+          include: {
+            vehicleAssignments: { where: { endedAt: null }, include: { vehicle: { include: { company: true, products: true } } }, orderBy: { startedAt: "desc" }, take: 1 },
+            carrierLinks: { where: { endedAt: null }, include: { company: true }, orderBy: { startedAt: "desc" }, take: 1 },
+          },
+        },
+      },
+    });
     if (!user) return response.status(401).json({ error: "Usuário não encontrado" });
     request.user = user;
     next();
@@ -136,6 +147,30 @@ const publicUser = (user) => ({
   role: user.profile?.role || "driver",
 });
 
+const publicCompany = (company) => company ? ({
+  id: company.id,
+  name: company.legalName,
+  legal_name: company.legalName,
+  cnpj: company.cnpj,
+  state_registration: company.stateRegistration,
+  phone: company.phone,
+  address: company.address,
+  email: company.email,
+  status: company.status,
+}) : null;
+
+const publicVehicle = (vehicle) => vehicle ? ({
+  id: vehicle.id,
+  type: vehicle.type,
+  plate: vehicle.plate,
+  capacity: vehicle.capacity,
+  compartments: vehicle.compartments,
+  product_type: vehicle.productType,
+  products: vehicle.products?.filter((product) => product.enabled).map((product) => product.product) || [],
+  homologation_status: vehicle.homologationStatus,
+  company: publicCompany(vehicle.company),
+}) : null;
+
 const publicDriver = (driver) => ({
   id: driver.id,
   user_id: driver.userId,
@@ -145,12 +180,17 @@ const publicDriver = (driver) => ({
   email: driver.email,
   vehicle_model: driver.vehicleModel,
   vehicle_year: driver.vehicleYear,
-  capacity: driver.capacity,
   compartments: driver.compartments,
   plate: driver.plate,
   cnh: driver.cnh,
+  cnh_category: driver.cnhCategory,
+  cnh_expires_at: driver.cnhExpiresAt?.toISOString() || null,
   city: driver.city,
   state: driver.state,
+  homologation_status: driver.homologationStatus,
+  location_sharing_authorized: driver.locationSharingAuthorized,
+  current_vehicle: publicVehicle(driver.vehicleAssignments?.[0]?.vehicle),
+  carrier: publicCompany(driver.carrierLinks?.[0]?.company),
   is_online: driver.isOnline,
   latitude: driver.latitude,
   longitude: driver.longitude,
@@ -223,10 +263,19 @@ app.post("/api/auth/login", async (request, response) => {
   const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
   const password = typeof request.body?.password === "string" ? request.body.password : "";
   const phone = typeof request.body?.phone === "string" ? request.body.phone.trim() : "";
-  const user = await prisma.user.findUnique({ where: { email }, include: { profile: true, driver: true } });
+  const user = await prisma.user.findUnique({ where: { email }, include: { profile: { include: { company: true } }, driver: true, transportCompany: true } });
   if (!user || !(await verifyPassword(password, user.passwordHash))) return response.status(401).json({ error: "E-mail ou senha inválidos" });
   if (!user.profile?.approved) return response.status(403).json({ error: "Conta aguardando aprovação do administrador" });
   response.json({ access_token: encodeToken({ sub: user.id }), user: publicUser(user), profile: user.profile });
+});
+
+app.post("/api/auth/change-initial-password", auth, async (request, response) => {
+  const password = typeof request.body?.password === "string" ? request.body.password : "";
+  if (password.length < 8) return response.status(400).json({ error: "A nova senha deve ter no mínimo 8 caracteres" });
+  const passwordHash = await hashPassword(password);
+  const profile = await prisma.profile.update({ where: { userId: request.user.id }, data: { mustChangePassword: false } });
+  await prisma.user.update({ where: { id: request.user.id }, data: { passwordHash } });
+  response.json({ profile });
 });
 
 app.post("/api/auth/signup", async (request, response) => {
@@ -234,12 +283,26 @@ app.post("/api/auth/signup", async (request, response) => {
   const fullName = typeof request.body?.fullName === "string" ? request.body.fullName.trim() : "";
   const phone = typeof request.body?.phone === "string" ? request.body.phone.trim() : "";
   const password = typeof request.body?.password === "string" ? request.body.password : "";
-  const requestedRole = ["driver", "operator"].includes(request.body?.requestedRole) ? request.body.requestedRole : "driver";
+  const requestedRole = ["driver", "carrier"].includes(request.body?.requestedRole) ? request.body.requestedRole : "driver";
   const registrationNotes = typeof request.body?.registrationNotes === "string" ? request.body.registrationNotes.trim().slice(0, 1000) : null;
-  if (!email || !fullName || !phone || password.length < 6) return response.status(400).json({ error: "Nome, e-mail, telefone e senha válida são obrigatórios" });
+  const companyData = request.body?.company || {};
+  const legalName = typeof companyData.legalName === "string" ? companyData.legalName.trim() : "";
+  const cnpj = typeof companyData.cnpj === "string" ? companyData.cnpj.trim() : "";
+  const stateRegistration = typeof companyData.stateRegistration === "string" ? companyData.stateRegistration.trim() || null : null;
+  const address = typeof companyData.address === "string" ? companyData.address.trim() : "";
+  const driverData = request.body?.driver || {};
+  if (!email || !fullName || !phone || password.length < 6) return response.status(400).json({ error: requestedRole === "carrier" ? "Nome do sócio representante, e-mail, telefone e senha válida são obrigatórios" : "Nome, e-mail, telefone e senha válida são obrigatórios" });
+  if (requestedRole === "carrier" && (!legalName || !cnpj || !address)) return response.status(400).json({ error: "Razão social, CNPJ e endereço são obrigatórios para transportadora" });
+  if (requestedRole === "driver" && [driverData.cpf, driverData.cnh, driverData.cnhCategory, driverData.cnhExpiresAt, driverData.city, driverData.state, driverData.vehicleModel, driverData.vehicleYear, driverData.plate, driverData.capacity, driverData.compartments].some((value) => value === undefined || value === null || String(value).trim() === "")) return response.status(400).json({ error: "CPF, CNH, categoria, validade, cidade, UF e veículo completo são obrigatórios para motorista" });
   try {
     const passwordHash = await hashPassword(password);
-    await prisma.user.create({ data: { email, fullName, phone, passwordHash, profile: { create: { fullName, role: "driver", requestedRole, registrationNotes, approved: false } } } });
+    await prisma.$transaction(async (transaction) => {
+      const user = await transaction.user.create({ data: { email, fullName, phone, passwordHash, profile: { create: { fullName, role: requestedRole, requestedRole, registrationNotes, approved: false } }, ...(requestedRole === "driver" ? { driver: { create: { fullName, email, phone, cpf: driverData.cpf?.trim() || null, vehicleModel: driverData.vehicleModel?.trim() || null, vehicleYear: Number.isInteger(driverData.vehicleYear) ? driverData.vehicleYear : null, capacity: driverData.capacity?.trim() || null, compartments: driverData.compartments?.trim() || null, plate: driverData.plate?.trim() || null, cnh: driverData.cnh?.trim() || null, cnhCategory: driverData.cnhCategory?.trim() || null, cnhExpiresAt: driverData.cnhExpiresAt ? new Date(driverData.cnhExpiresAt) : null, city: driverData.city?.trim() || null, state: driverData.state?.trim() || null, locationSharingAuthorized: driverData.locationSharingAuthorized === true, homologationStatus: "in_analysis" } } } : {}) } });
+      if (requestedRole === "carrier") {
+        const company = await transaction.transportCompany.create({ data: { userId: user.id, legalName, cnpj, stateRegistration, phone, address, email, status: "in_analysis" } });
+        await transaction.profile.update({ where: { userId: user.id }, data: { companyId: company.id } });
+      }
+    });
     broadcast("registration-created");
     response.status(202).json({ pending: true, message: "Cadastro recebido. Aguarde a aprovação do administrador." });
   } catch (error) {
@@ -319,19 +382,56 @@ const requireOperations = (request, response, next) => {
   next();
 };
 
+const requireCarrier = (request, response, next) => {
+  if (request.user.profile?.role !== "carrier" || !request.user.profile.companyId) return response.status(403).json({ error: "Acesso restrito à transportadora" });
+  next();
+};
+
+app.post("/api/admin/users", auth, requireAdmin, async (request, response) => {
+  const fullName = typeof request.body?.fullName === "string" ? request.body.fullName.trim() : "";
+  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
+  const phone = typeof request.body?.phone === "string" ? request.body.phone.trim() : "";
+  const role = ["operator", "admin"].includes(request.body?.role) ? request.body.role : null;
+  const initialPassword = typeof request.body?.initialPassword === "string" ? request.body.initialPassword : "";
+  if (!fullName || !email || !role || initialPassword.length < 8) return response.status(400).json({ error: "Nome, e-mail, perfil e senha inicial válida são obrigatórios" });
+  try {
+    const passwordHash = await hashPassword(initialPassword);
+    const user = await prisma.user.create({
+      data: {
+        fullName,
+        email,
+        phone: phone || null,
+        passwordHash,
+        profile: { create: { fullName, role, requestedRole: role, approved: true, mustChangePassword: true } },
+      },
+      include: { profile: true },
+    });
+    broadcast("admin-user-created");
+    response.status(201).json({ user: publicUser(user), profile: user.profile });
+  } catch (error) {
+    if (error?.code === "P2002") return response.status(409).json({ error: "Este e-mail já está cadastrado" });
+    response.status(400).json({ error: "Não foi possível criar o acesso" });
+  }
+});
+
 app.get("/api/admin/pending-users", auth, requireOperations, async (_request, response) => {
+  const isOperator = _request.user.profile?.role === "operator";
   const profiles = await prisma.profile.findMany({
-    where: { approved: false, approvalClosed: false },
-    include: { user: true },
+    where: {
+      approved: false,
+      approvalClosed: false,
+      ...(isOperator ? { requestedRole: { in: ["driver", "carrier"] } } : {}),
+    },
+    include: { user: { include: { driver: true } }, company: true },
     orderBy: { createdAt: "asc" },
   });
-  response.json({ users: profiles.map((profile) => ({ id: profile.userId, profile_id: profile.id, full_name: profile.fullName, email: profile.user.email, phone: profile.user.phone, role: profile.role, requested_role: profile.requestedRole, registration_notes: profile.registrationNotes, created_at: profile.createdAt.toISOString() })) });
+  response.json({ users: profiles.map((profile) => ({ id: profile.userId, profile_id: profile.id, full_name: profile.fullName, email: profile.user.email, phone: profile.user.phone, role: profile.role, requested_role: profile.requestedRole, company_id: profile.companyId, registration_notes: profile.registrationNotes, driver: profile.user.driver ? { full_name: profile.user.driver.fullName, phone: profile.user.driver.phone, cpf: profile.user.driver.cpf, cnh: profile.user.driver.cnh, cnh_category: profile.user.driver.cnhCategory, cnh_expires_at: profile.user.driver.cnhExpiresAt?.toISOString() || "", vehicle_model: profile.user.driver.vehicleModel, plate: profile.user.driver.plate, vehicle_year: profile.user.driver.vehicleYear, city: profile.user.driver.city, state: profile.user.driver.state, capacity: profile.user.driver.capacity, compartments: profile.user.driver.compartments, location_sharing_authorized: profile.user.driver.locationSharingAuthorized } : null, created_at: profile.createdAt.toISOString() })) });
 });
 
 app.get("/api/admin/registration-requests", auth, requireAdmin, async (_request, response) => {
   const profiles = await prisma.profile.findMany({
     where: { approved: false },
-    include: { user: true },
+    include: { user: { include: { driver: true } }, company: true },
     orderBy: { createdAt: "desc" },
   });
   response.json({
@@ -344,6 +444,8 @@ app.get("/api/admin/registration-requests", auth, requireAdmin, async (_request,
       role: profile.role,
       requested_role: profile.requestedRole,
       registration_notes: profile.registrationNotes,
+      company_id: profile.companyId,
+      driver: profile.user.driver ? { full_name: profile.user.driver.fullName, phone: profile.user.driver.phone, cpf: profile.user.driver.cpf, cnh: profile.user.driver.cnh, cnh_category: profile.user.driver.cnhCategory, cnh_expires_at: profile.user.driver.cnhExpiresAt?.toISOString() || "", vehicle_model: profile.user.driver.vehicleModel, plate: profile.user.driver.plate, vehicle_year: profile.user.driver.vehicleYear, city: profile.user.driver.city, state: profile.user.driver.state, capacity: profile.user.driver.capacity, compartments: profile.user.driver.compartments, location_sharing_authorized: profile.user.driver.locationSharingAuthorized } : null,
       approval_closed: profile.approvalClosed,
       created_at: profile.createdAt.toISOString(),
     }))
@@ -370,26 +472,83 @@ app.patch("/api/admin/users/:userId/reopen-approval", auth, requireAdmin, async 
   response.json({ reopened: true });
 });
 
+app.delete("/api/admin/users/:userId/reject", auth, requireOperations, async (request, response) => {
+  const user = await prisma.user.findUnique({
+    where: { id: request.params.userId },
+    include: { profile: true, transportCompany: true },
+  });
+  if (!user?.profile) return response.status(404).json({ error: "Solicitação não encontrada" });
+  if (user.profile.approved) return response.status(400).json({ error: "Cadastros aprovados não podem ser rejeitados por esta ação" });
+
+  await prisma.$transaction(async (transaction) => {
+    if (user.transportCompany) {
+      await transaction.vehicle.deleteMany({
+        where: { companyId: user.transportCompany.id },
+      });
+      await transaction.transportCompany.delete({ where: { id: user.transportCompany.id } });
+    }
+    await transaction.user.delete({ where: { id: user.id } });
+  });
+  broadcast("registration-rejected");
+  response.status(204).end();
+});
+
+app.delete("/api/admin/users/:userId/remove", auth, requireAdmin, async (request, response) => {
+  const user = await prisma.user.findUnique({
+    where: { id: request.params.userId },
+    include: { profile: true, transportCompany: true },
+  });
+  if (!user?.profile) return response.status(404).json({ error: "Usuário não encontrado" });
+  if (user.profile.role === "admin") return response.status(400).json({ error: "Administradores não podem ser removidos por esta ação" });
+
+  await prisma.$transaction(async (transaction) => {
+    if (user.transportCompany) {
+      await transaction.vehicle.deleteMany({ where: { companyId: user.transportCompany.id } });
+      await transaction.transportCompany.delete({ where: { id: user.transportCompany.id } });
+    }
+    await transaction.user.delete({ where: { id: user.id } });
+  });
+  broadcast("admin-user-removed");
+  response.status(204).end();
+});
+
 app.patch("/api/admin/users/:userId/approve", auth, requireOperations, async (request, response) => {
-  const assignedRole = ["driver", "operator", "admin"].includes(request.body?.role) ? request.body.role : null;
+  const assignedRole = ["driver", "carrier", "operator", "admin"].includes(request.body?.role) ? request.body.role : null;
   if (!assignedRole) return response.status(400).json({ error: "Informe um perfil válido" });
-  const user = await prisma.user.findUnique({ where: { id: request.params.userId }, include: { profile: true, driver: true } });
+  if (request.user.profile?.role === "operator" && !["driver", "carrier"].includes(assignedRole)) {
+    return response.status(403).json({ error: "Operadores só podem aprovar motoristas e transportadoras" });
+  }
+  const user = await prisma.user.findUnique({ where: { id: request.params.userId }, include: { profile: true, driver: true, transportCompany: true } });
   if (!user?.profile) return response.status(404).json({ error: "Cadastro não encontrado" });
   if (user.profile.approvalClosed) return response.status(400).json({ error: "Reabra a solicitação antes de aprovar" });
   if (!user.fullName?.trim() || !user.email?.trim() || !user.phone?.trim()) {
     return response.status(400).json({ error: "Nome, e-mail e telefone do cadastro são obrigatórios" });
   }
   const driverData = request.body?.driver || {};
-  const requiredDriverFields = ["fullName", "phone", "vehicleModel", "plate", "city", "state", "capacity", "compartments"];
+  const requiredDriverFields = user.profile.companyId
+    ? ["fullName", "phone"]
+    : ["fullName", "phone", "cpf", "cnh", "cnhCategory", "cnhExpiresAt", "vehicleModel", "vehicleYear", "plate", "city", "state", "capacity", "compartments"];
   if (assignedRole === "driver" && requiredDriverFields.some((field) => typeof driverData[field] !== "string" || !driverData[field].trim())) {
     return response.status(400).json({ error: "Preencha todos os campos obrigatórios do motorista antes de aprovar" });
   }
+  const initialPassword = typeof request.body?.initialPassword === "string" ? request.body.initialPassword : "";
+  if (["operator", "admin"].includes(assignedRole) && initialPassword.length < 8) {
+    return response.status(400).json({ error: "Informe uma senha inicial com no mínimo 8 caracteres" });
+  }
+  const initialPasswordHash = ["operator", "admin"].includes(assignedRole)
+    ? await hashPassword(initialPassword)
+    : null;
   const profile = await prisma.$transaction(async (transaction) => {
-    const updatedProfile = await transaction.profile.update({ where: { userId: request.params.userId }, data: { approved: true, role: assignedRole } });
+    const updatedProfile = await transaction.profile.update({ where: { userId: request.params.userId }, data: { approved: true, role: assignedRole, mustChangePassword: ["operator", "admin"].includes(assignedRole) } });
+    if (assignedRole === "carrier" && user.transportCompany) {
+      await transaction.transportCompany.update({ where: { id: user.transportCompany.id }, data: { status: "active" } });
+    }
+    if (initialPasswordHash) await transaction.user.update({ where: { id: user.id }, data: { passwordHash: initialPasswordHash } });
     if (assignedRole === "driver" && !user.driver) {
-      await transaction.driver.create({ data: { userId: user.id, fullName: driverData.fullName.trim(), email: user.email, phone: driverData.phone.trim(), vehicleModel: driverData.vehicleModel.trim(), plate: driverData.plate.trim(), city: driverData.city.trim(), state: driverData.state.trim(), capacity: driverData.capacity.trim(), compartments: driverData.compartments.trim() } });
+      const approvedDriver = await transaction.driver.create({ data: { userId: user.id, fullName: driverData.fullName.trim(), email: user.email, phone: driverData.phone.trim(), vehicleModel: driverData.vehicleModel?.trim() || null, vehicleYear: driverData.vehicleYear ? Number(driverData.vehicleYear) : null, plate: driverData.plate?.trim() || null, city: driverData.city?.trim() || null, state: driverData.state?.trim() || null, capacity: driverData.capacity?.trim() || null, compartments: driverData.compartments?.trim() || null, cpf: driverData.cpf?.trim() || null, cnh: driverData.cnh?.trim() || null, cnhCategory: driverData.cnhCategory?.trim() || null, cnhExpiresAt: driverData.cnhExpiresAt ? new Date(driverData.cnhExpiresAt) : null, locationSharingAuthorized: driverData.locationSharingAuthorized === true, homologationStatus: "active" } });
+      if (user.profile.companyId) await transaction.driverCarrierLink.create({ data: { driverId: approvedDriver.id, companyId: user.profile.companyId } });
     } else if (assignedRole === "driver" && user.driver) {
-      await transaction.driver.update({ where: { id: user.driver.id }, data: { fullName: driverData.fullName.trim(), email: user.email, phone: driverData.phone.trim(), vehicleModel: driverData.vehicleModel.trim(), plate: driverData.plate.trim(), city: driverData.city.trim(), state: driverData.state.trim(), capacity: driverData.capacity.trim(), compartments: driverData.compartments.trim() } });
+      await transaction.driver.update({ where: { id: user.driver.id }, data: { fullName: driverData.fullName.trim(), email: user.email, phone: driverData.phone.trim(), vehicleModel: driverData.vehicleModel === undefined ? user.driver.vehicleModel : driverData.vehicleModel.trim() || null, vehicleYear: driverData.vehicleYear === undefined ? user.driver.vehicleYear : Number(driverData.vehicleYear), plate: driverData.plate === undefined ? user.driver.plate : driverData.plate.trim() || null, city: driverData.city === undefined ? user.driver.city : driverData.city.trim() || null, state: driverData.state === undefined ? user.driver.state : driverData.state.trim() || null, capacity: driverData.capacity === undefined ? user.driver.capacity : driverData.capacity.trim() || null, compartments: driverData.compartments === undefined ? user.driver.compartments : driverData.compartments.trim() || null, cpf: driverData.cpf === undefined ? user.driver.cpf : driverData.cpf.trim() || null, cnh: driverData.cnh === undefined ? user.driver.cnh : driverData.cnh.trim() || null, cnhCategory: driverData.cnhCategory === undefined ? user.driver.cnhCategory : driverData.cnhCategory.trim() || null, cnhExpiresAt: driverData.cnhExpiresAt === undefined ? user.driver.cnhExpiresAt : driverData.cnhExpiresAt ? new Date(driverData.cnhExpiresAt) : null, locationSharingAuthorized: driverData.locationSharingAuthorized === undefined ? user.driver.locationSharingAuthorized : driverData.locationSharingAuthorized === true, homologationStatus: "active" } });
     }
     return updatedProfile;
   });
@@ -405,8 +564,9 @@ app.get("/api/drivers/me", auth, async (request, response) => {
 app.patch("/api/drivers/me", auth, async (request, response) => {
   if (!request.user.driver) return response.status(404).json({ error: "Motorista ainda não cadastrado" });
   const body = request.body || {};
-  const allowed = ["fullName", "cpf", "phone", "email", "vehicleModel", "vehicleYear", "capacity", "compartments", "plate", "cnh", "city", "state", "notes"];
+  const allowed = ["fullName", "cpf", "phone", "email", "vehicleModel", "vehicleYear", "capacity", "compartments", "plate", "cnh", "cnhCategory", "cnhExpiresAt", "city", "state", "notes", "locationSharingAuthorized"];
   const data = Object.fromEntries(Object.entries(body).filter(([key]) => allowed.includes(key)));
+  if (data.cnhExpiresAt) data.cnhExpiresAt = new Date(data.cnhExpiresAt);
   const driver = await prisma.driver.update({ where: { id: request.user.driver.id }, data });
   broadcast("driver-updated");
   response.json({ driver: publicDriver(driver) });
@@ -434,7 +594,11 @@ app.patch("/api/drivers/me/status", auth, async (request, response) => {
 app.get("/api/drivers", auth, async (request, response) => {
   if (!['operator', 'admin'].includes(request.user.profile?.role)) return response.status(403).json({ error: "Acesso não permitido" });
   const activeSince = new Date(Date.now() - 2 * 60 * 1000);
-  const drivers = await prisma.driver.findMany({ where: { isOnline: true, lastSeen: { gte: activeSince } }, orderBy: { availabilitySince: "asc" } });
+  const drivers = await prisma.driver.findMany({
+    where: { isOnline: true, lastSeen: { gte: activeSince } },
+    include: { vehicleAssignments: { where: { endedAt: null }, include: { vehicle: { include: { company: true } } }, orderBy: { startedAt: "desc" }, take: 1 }, carrierLinks: { where: { endedAt: null }, include: { company: true }, orderBy: { startedAt: "desc" }, take: 1 } },
+    orderBy: { availabilitySince: "asc" },
+  });
   response.json({ drivers: drivers.map(publicDriver) });
 });
 
@@ -514,12 +678,14 @@ app.post("/api/operations/routes", auth, requireOperations, async (request, resp
 
 app.get("/api/operations/directory", auth, requireOperations, async (request, response) => {
   const activeSince = new Date(Date.now() - 2 * 60 * 1000);
+  const driverRelations = { vehicleAssignments: { where: { endedAt: null }, include: { vehicle: { include: { company: true, products: true } } }, orderBy: { startedAt: "desc" }, take: 1 }, carrierLinks: { where: { endedAt: null }, include: { company: true }, orderBy: { startedAt: "desc" }, take: 1 } };
   const drivers = await prisma.driver.findMany({
     where: { isOnline: true, lastSeen: { gte: activeSince } },
+    include: driverRelations,
     orderBy: { availabilitySince: "asc" },
   });
   const allDrivers = request.user.profile?.role === "admin"
-    ? await prisma.driver.findMany({ orderBy: { fullName: "asc" } })
+    ? await prisma.driver.findMany({ include: driverRelations, orderBy: { fullName: "asc" } })
     : [];
   const operators = request.user.profile?.role === "admin"
     ? await prisma.user.findMany({
@@ -542,6 +708,122 @@ app.get("/api/operations/directory", auth, requireOperations, async (request, re
     })),
     locations: locations.map(publicOperationalLocation),
   });
+});
+
+app.get("/api/carrier/registrations", auth, requireCarrier, async (request, response) => {
+  const companyId = request.user.profile.companyId;
+  const [drivers, vehicles] = await Promise.all([
+    prisma.driver.findMany({ where: { carrierLinks: { some: { companyId, endedAt: null } } }, orderBy: { fullName: "asc" } }),
+    prisma.vehicle.findMany({ where: { companyId }, include: { products: true, driverAssignments: { where: { endedAt: null }, include: { driver: true }, orderBy: { startedAt: "desc" }, take: 1 } }, orderBy: { plate: "asc" } }),
+  ]);
+  response.json({ drivers: drivers.map(publicDriver), vehicles: vehicles.map((vehicle) => ({ id: vehicle.id, type: vehicle.type, plate: vehicle.plate, capacity: vehicle.capacity, products: vehicle.products.filter((product) => product.enabled).map((product) => product.product), status: vehicle.homologationStatus, current_driver: vehicle.driverAssignments[0]?.driver ? { id: vehicle.driverAssignments[0].driver.id, full_name: vehicle.driverAssignments[0].driver.fullName } : null })) });
+});
+
+app.post("/api/carrier/drivers", auth, requireCarrier, async (request, response) => {
+  const fullName = typeof request.body?.fullName === "string" ? request.body.fullName.trim() : "";
+  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
+  const phone = typeof request.body?.phone === "string" ? request.body.phone.trim() : "";
+  const password = typeof request.body?.password === "string" ? request.body.password : "";
+  if (!fullName || !email || !phone || password.length < 6) return response.status(400).json({ error: "Nome, e-mail, telefone e senha válida são obrigatórios" });
+  try {
+    const passwordHash = await hashPassword(password);
+    const user = await prisma.user.create({ data: { fullName, email, phone, passwordHash, profile: { create: { fullName, role: "driver", requestedRole: "driver", companyId: request.user.profile.companyId, approved: false, registrationNotes: "Cadastro criado pela transportadora" } } } });
+    broadcast("registration-created");
+    response.status(202).json({ pending: true, user: { id: user.id, full_name: fullName, email, phone } });
+  } catch (error) {
+    if (error?.code === "P2002") return response.status(409).json({ error: "Este e-mail já está cadastrado" });
+    response.status(400).json({ error: "Não foi possível solicitar o cadastro do motorista" });
+  }
+});
+
+app.post("/api/carrier/vehicles", auth, requireCarrier, async (request, response) => {
+  const type = typeof request.body?.type === "string" ? request.body.type.trim() : "";
+  const plate = typeof request.body?.plate === "string" ? request.body.plate.trim().toUpperCase() : "";
+  const products = Array.isArray(request.body?.products) ? request.body.products.filter((product) => typeof product === "string" && product.trim()).map((product) => product.trim()) : [];
+  if (!type || !plate) return response.status(400).json({ error: "Tipo e placa são obrigatórios" });
+  try {
+    const vehicle = await prisma.vehicle.create({ data: { companyId: request.user.profile.companyId, type, plate, capacity: request.body?.capacity?.trim() || null, compartments: request.body?.compartments?.trim() || null, homologationStatus: "in_analysis", products: { create: products.map((product) => ({ product })) } }, include: { products: true } });
+    broadcast("vehicle-registration-created");
+    response.status(202).json({ vehicle: { id: vehicle.id, type: vehicle.type, plate: vehicle.plate, status: vehicle.homologationStatus, products: vehicle.products.map((product) => product.product) } });
+  } catch (error) {
+    if (error?.code === "P2002") return response.status(409).json({ error: "Esta placa já está cadastrada" });
+    response.status(400).json({ error: "Não foi possível solicitar o cadastro do veículo" });
+  }
+});
+
+app.post("/api/carrier/vehicles/:vehicleId/driver", auth, requireCarrier, async (request, response) => {
+  const companyId = request.user.profile.companyId;
+  const driverId = typeof request.body?.driverId === "string" ? request.body.driverId : "";
+  const [vehicle, driver] = await Promise.all([
+    prisma.vehicle.findFirst({ where: { id: request.params.vehicleId, companyId } }),
+    prisma.driver.findFirst({ where: { id: driverId, carrierLinks: { some: { companyId, endedAt: null } } } }),
+  ]);
+  if (!vehicle || !driver) return response.status(404).json({ error: "Veículo ou motorista não pertence à transportadora" });
+  if (vehicle.homologationStatus !== "active" || driver.homologationStatus !== "active") return response.status(409).json({ error: "Veículo e motorista precisam estar ativos para criar o vínculo" });
+  const assignment = await prisma.$transaction(async (transaction) => {
+    await transaction.vehicleDriverAssignment.updateMany({ where: { vehicleId: vehicle.id, endedAt: null }, data: { endedAt: new Date(), status: "ended" } });
+    return transaction.vehicleDriverAssignment.create({ data: { vehicleId: vehicle.id, driverId: driver.id } });
+  });
+  broadcast("vehicle-driver-linked");
+  response.status(201).json({ assignment });
+});
+
+app.get("/api/admin/pending-vehicles", auth, requireOperations, async (_request, response) => {
+  const vehicles = await prisma.vehicle.findMany({ where: { homologationStatus: "in_analysis" }, include: { company: true, products: true }, orderBy: { createdAt: "asc" } });
+  response.json({ vehicles: vehicles.map((vehicle) => ({ id: vehicle.id, type: vehicle.type, plate: vehicle.plate, capacity: vehicle.capacity, company: publicCompany(vehicle.company), products: vehicle.products.map((product) => product.product), status: vehicle.homologationStatus })) });
+});
+
+app.patch("/api/admin/vehicles/:vehicleId/approval", auth, requireOperations, async (request, response) => {
+  const status = ["active", "rejected", "blocked"].includes(request.body?.status) ? request.body.status : null;
+  if (!status) return response.status(400).json({ error: "Informe uma situação válida" });
+  const vehicle = await prisma.vehicle.update({ where: { id: request.params.vehicleId }, data: { homologationStatus: status } });
+  broadcast("vehicle-approval-updated");
+  response.json({ vehicle: { id: vehicle.id, status: vehicle.homologationStatus } });
+});
+
+app.post("/api/operations/vehicles/:vehicleId/driver", auth, requireOperations, async (request, response) => {
+  const { driverId } = request.body || {};
+  if (typeof driverId !== "string" || !driverId) return response.status(400).json({ error: "Motorista é obrigatório" });
+  try {
+    const assignment = await prisma.$transaction(async (transaction) => {
+      const vehicle = await transaction.vehicle.findUnique({ where: { id: request.params.vehicleId } });
+      const driver = await transaction.driver.findUnique({ where: { id: driverId } });
+      if (!vehicle || !driver) throw new Error("Veículo ou motorista não encontrado");
+      await transaction.vehicleDriverAssignment.updateMany({ where: { vehicleId: vehicle.id, endedAt: null }, data: { endedAt: new Date(), status: "ended" } });
+      return transaction.vehicleDriverAssignment.create({ data: { vehicleId: vehicle.id, driverId: driver.id } });
+    });
+    broadcast("vehicle-driver-linked");
+    response.status(201).json({ assignment });
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : "Não foi possível vincular o motorista" });
+  }
+});
+
+app.delete("/api/operations/vehicles/:vehicleId/driver", auth, requireOperations, async (request, response) => {
+  const result = await prisma.vehicleDriverAssignment.updateMany({ where: { vehicleId: request.params.vehicleId, endedAt: null }, data: { endedAt: new Date(), status: "ended" } });
+  if (result.count === 0) return response.status(404).json({ error: "Vínculo ativo não encontrado" });
+  broadcast("vehicle-driver-unlinked");
+  response.status(204).end();
+});
+
+app.post("/api/operations/drivers/:driverId/carrier", auth, requireOperations, async (request, response) => {
+  const { companyId } = request.body || {};
+  if (typeof companyId !== "string" || !companyId) return response.status(400).json({ error: "Transportadora é obrigatória" });
+  try {
+    const link = await prisma.$transaction(async (transaction) => {
+      const [driver, company] = await Promise.all([
+        transaction.driver.findUnique({ where: { id: request.params.driverId } }),
+        transaction.transportCompany.findUnique({ where: { id: companyId } }),
+      ]);
+      if (!driver || !company) throw new Error("Motorista ou transportadora não encontrado");
+      await transaction.driverCarrierLink.updateMany({ where: { driverId: driver.id, endedAt: null }, data: { endedAt: new Date(), status: "ended" } });
+      return transaction.driverCarrierLink.create({ data: { driverId: driver.id, companyId: company.id } });
+    });
+    broadcast("driver-carrier-linked");
+    response.status(201).json({ link });
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : "Não foi possível vincular a transportadora" });
+  }
 });
 
 app.patch("/api/admin/drivers/:driverId", auth, requireOperations, async (request, response) => {

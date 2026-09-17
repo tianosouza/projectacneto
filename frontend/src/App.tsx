@@ -28,6 +28,9 @@ import {
   UsersRound,
   Factory,
   Flag,
+  Building2,
+  FileCheck2,
+  Link2,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import type {
@@ -45,13 +48,15 @@ import {
   loadList,
   saveList,
 } from "@/lib/dashboardData";
-import { AuthScreen } from "@/components/AuthScreen";
+import { AuthScreen, InitialPasswordScreen } from "@/components/AuthScreen";
 import { DriverPortal } from "@/components/DriverPortal";
 import { AccountCenter } from "@/components/AccountCenter";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { DirectoryPanel, MetricCard } from "@/components/DashboardPrimitives";
 import { DirectorySearch as ReusableDirectorySearch } from "@/components/DirectorySearch";
 import { RegistrationRequestsPanel as ReusableRegistrationRequestsPanel } from "@/components/RegistrationRequestsPanel";
+import { ConfirmationModal } from "@/components/ConfirmationModal";
+import { AppDownloadButton } from "@/components/AppDownloadButton";
 import { apiEventSource, apiFetch } from "@/lib/api";
 
 function App() {
@@ -67,6 +72,10 @@ function App() {
 
   if (!user) {
     return <AuthScreen />;
+  }
+
+  if (profile?.must_change_password) {
+    return <InitialPasswordScreen />;
   }
 
   if (profile?.role === "driver") {
@@ -99,7 +108,342 @@ function App() {
     );
   }
 
+  if (profile?.role === "carrier") {
+    return (
+      <CarrierDashboard
+        title="Transportadora"
+        accountUser={user}
+        accountProfile={profile}
+        onSignOut={signOut}
+      />
+    );
+  }
+
   return <DriverPortal />;
+}
+
+function CarrierDashboard({
+  title,
+  accountUser,
+  accountProfile,
+  onSignOut,
+}: {
+  title: string;
+  accountUser: {
+    email: string;
+    phone?: string | null;
+    user_metadata: { full_name?: string };
+  };
+  accountProfile: { role: string; created_at: string } | null;
+  onSignOut: () => Promise<void>;
+}) {
+  const token = localStorage.getItem("acneto-access-token");
+  const [drivers, setDrivers] = useState<DemoDriver[]>([]);
+  const [vehicles, setVehicles] = useState<
+    Array<{
+      id: string;
+      type: string;
+      plate: string;
+      capacity: string | null;
+      products: string[];
+      status: string;
+      current_driver?: { id: string; full_name: string } | null;
+    }>
+  >([]);
+  const [driverForm, setDriverForm] = useState({
+    fullName: "",
+    email: "",
+    phone: "",
+    password: "",
+  });
+  const [vehicleForm, setVehicleForm] = useState({
+    type: "",
+    plate: "",
+    capacity: "",
+    compartments: "",
+    products: "",
+  });
+  const [error, setError] = useState("");
+  const [assignmentDriverIds, setAssignmentDriverIds] = useState<
+    Record<string, string>
+  >({});
+  const headers = {
+    Authorization: `Bearer ${token ?? ""}`,
+    "Content-Type": "application/json",
+  };
+
+  const refresh = async () => {
+    const response = await apiFetch("/api/carrier/registrations", { headers });
+    if (response.ok) {
+      const body = (await response.json()) as {
+        drivers: DemoDriver[];
+        vehicles: typeof vehicles;
+      };
+      setDrivers(body.drivers);
+      setVehicles(body.vehicles);
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const submitDriver = async () => {
+    setError("");
+    const response = await apiFetch("/api/carrier/drivers", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(driverForm),
+    });
+    const body = (await response.json()) as { error?: string };
+    if (!response.ok)
+      return setError(body.error ?? "Não foi possível cadastrar o motorista");
+    setDriverForm({ fullName: "", email: "", phone: "", password: "" });
+    await refresh();
+  };
+
+  const submitVehicle = async () => {
+    setError("");
+    const response = await apiFetch("/api/carrier/vehicles", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        ...vehicleForm,
+        products: vehicleForm.products
+          .split(",")
+          .map((product) => product.trim())
+          .filter(Boolean),
+      }),
+    });
+    const body = (await response.json()) as { error?: string };
+    if (!response.ok)
+      return setError(body.error ?? "Não foi possível cadastrar o veículo");
+    setVehicleForm({
+      type: "",
+      plate: "",
+      capacity: "",
+      compartments: "",
+      products: "",
+    });
+    await refresh();
+  };
+
+  const assignDriver = async (vehicleId: string) => {
+    const driverId = assignmentDriverIds[vehicleId];
+    if (!driverId) return;
+    const response = await apiFetch(
+      `/api/carrier/vehicles/${vehicleId}/driver`,
+      { method: "POST", headers, body: JSON.stringify({ driverId }) },
+    );
+    const body = (await response.json()) as { error?: string };
+    if (!response.ok)
+      return setError(body.error ?? "Não foi possível vincular o motorista");
+    await refresh();
+  };
+
+  return (
+    <div className="min-h-screen bg-[#f5f7fa] p-4 sm:p-6">
+      <header className="mx-auto flex max-w-6xl items-center justify-between rounded-2xl bg-[#0b1d3a] px-5 py-4 text-white shadow-lg">
+        <div>
+          <p className="text-xs uppercase tracking-[0.16em] text-blue-200">
+            Portal da transportadora
+          </p>
+          <h1 className="text-xl font-bold">{title}</h1>
+          <p className="text-xs text-blue-100/70">
+            {accountUser.email} · {accountProfile?.role}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void onSignOut()}
+          className="rounded-lg border border-white/20 px-3 py-2 text-sm font-semibold hover:bg-white/10"
+        >
+          Sair
+        </button>
+      </header>
+      <main className="mx-auto mt-6 max-w-6xl space-y-6">
+        <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+          Você administra seus motoristas e veículos. Todo novo cadastro fica{" "}
+          <strong>em análise</strong> até aprovação de um operador ou
+          administrador.
+        </div>
+        {error && (
+          <div className="rounded-xl bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+            {error}
+          </div>
+        )}
+        <div className="grid gap-6 xl:grid-cols-2">
+          <RegistrationCard title="Solicitar motorista" icon={Users}>
+            <input
+              value={driverForm.fullName}
+              onChange={(e) =>
+                setDriverForm((form) => ({ ...form, fullName: e.target.value }))
+              }
+              placeholder="Nome completo *"
+              className={registrationInputClass}
+            />
+            <input
+              value={driverForm.email}
+              onChange={(e) =>
+                setDriverForm((form) => ({ ...form, email: e.target.value }))
+              }
+              placeholder="E-mail *"
+              type="email"
+              className={registrationInputClass}
+            />
+            <input
+              value={driverForm.phone}
+              onChange={(e) =>
+                setDriverForm((form) => ({ ...form, phone: e.target.value }))
+              }
+              placeholder="Celular / WhatsApp *"
+              className={registrationInputClass}
+            />
+            <input
+              value={driverForm.password}
+              onChange={(e) =>
+                setDriverForm((form) => ({ ...form, password: e.target.value }))
+              }
+              placeholder="Senha inicial *"
+              type="password"
+              className={registrationInputClass}
+            />
+            <p className="text-xs text-slate-500 sm:col-span-2">
+              O vínculo com veículo é opcional e pode ser feito depois da
+              aprovação.
+            </p>
+            <button
+              type="button"
+              onClick={() => void submitDriver()}
+              className={registrationButtonClass}
+            >
+              Enviar para aprovação <ArrowRight size={15} />
+            </button>
+          </RegistrationCard>
+          <RegistrationCard title="Solicitar veículo" icon={Truck}>
+            <input
+              value={vehicleForm.type}
+              onChange={(e) =>
+                setVehicleForm((form) => ({ ...form, type: e.target.value }))
+              }
+              placeholder="Tipo do veículo *"
+              className={registrationInputClass}
+            />
+            <input
+              value={vehicleForm.plate}
+              onChange={(e) =>
+                setVehicleForm((form) => ({
+                  ...form,
+                  plate: e.target.value.toUpperCase(),
+                }))
+              }
+              placeholder="Placa do cavalo *"
+              className={registrationInputClass}
+            />
+            <input
+              value={vehicleForm.capacity}
+              onChange={(e) =>
+                setVehicleForm((form) => ({
+                  ...form,
+                  capacity: e.target.value,
+                }))
+              }
+              placeholder="Capacidade total"
+              className={registrationInputClass}
+            />
+            <input
+              value={vehicleForm.compartments}
+              onChange={(e) =>
+                setVehicleForm((form) => ({
+                  ...form,
+                  compartments: e.target.value,
+                }))
+              }
+              placeholder="Compartimentação"
+              className={registrationInputClass}
+            />
+            <input
+              value={vehicleForm.products}
+              onChange={(e) =>
+                setVehicleForm((form) => ({
+                  ...form,
+                  products: e.target.value,
+                }))
+              }
+              placeholder="Produtos habilitados (separe por vírgula)"
+              className={`${registrationInputClass} sm:col-span-2`}
+            />
+            <button
+              type="button"
+              onClick={() => void submitVehicle()}
+              className={registrationButtonClass}
+            >
+              Enviar para aprovação <ArrowRight size={15} />
+            </button>
+          </RegistrationCard>
+        </div>
+        <div className="grid gap-6 xl:grid-cols-2">
+          <RegistrationList title="Motoristas da transportadora" icon={Users}>
+            {drivers.map((driver) => (
+              <RegistryRow
+                key={driver.id}
+                title={driver.full_name}
+                detail={`${driver.phone ?? "Sem telefone"} · ${driver.current_vehicle?.plate ?? "Sem veículo vinculado"}`}
+                status={driver.homologation_status ?? "in_analysis"}
+              />
+            ))}
+          </RegistrationList>
+          <RegistrationList title="Veículos da transportadora" icon={Truck}>
+            {vehicles.map((vehicle) => (
+              <div key={vehicle.id} className="space-y-2">
+                <RegistryRow
+                  title={`${vehicle.plate} · ${vehicle.type}`}
+                  detail={`${vehicle.capacity ?? "Capacidade não informada"} · ${vehicle.products.join(", ") || "Sem produto habilitado"} · ${vehicle.current_driver?.full_name ?? "Sem motorista"}`}
+                  status={vehicle.status}
+                />
+                {vehicle.status === "active" && (
+                  <div className="flex gap-2">
+                    <select
+                      value={
+                        assignmentDriverIds[vehicle.id] ??
+                        vehicle.current_driver?.id ??
+                        ""
+                      }
+                      onChange={(event) =>
+                        setAssignmentDriverIds((current) => ({
+                          ...current,
+                          [vehicle.id]: event.target.value,
+                        }))
+                      }
+                      className={`${registrationInputClass} min-w-0 flex-1`}
+                    >
+                      <option value="">Selecionar motorista</option>
+                      {drivers
+                        .filter(
+                          (driver) => driver.homologation_status === "active",
+                        )
+                        .map((driver) => (
+                          <option key={driver.id} value={driver.id}>
+                            {driver.full_name}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => void assignDriver(vehicle.id)}
+                      className="rounded-xl bg-[#0e4db7] px-3 py-2 text-xs font-semibold text-white"
+                    >
+                      Vincular
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </RegistrationList>
+        </div>
+      </main>
+    </div>
+  );
 }
 
 function RoleDashboard({
@@ -129,6 +473,7 @@ function RoleDashboard({
   );
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [locationPhone, setLocationPhone] = useState("");
   const [region, setRegion] = useState("");
   const [locationKind, setLocationKind] = useState<
     "collection_point" | "final_customer"
@@ -139,6 +484,10 @@ function RoleDashboard({
   const [accessLevel, setAccessLevel] = useState<AccessLevel>(
     role === "admin" ? "operador" : "cliente",
   );
+  const [registrationTab, setRegistrationTab] = useState<
+    "drivers" | "vehicles" | "companies" | "operators" | "admins" | "clients"
+  >(role === "admin" ? "admins" : "drivers");
+  const [initialAccessPassword, setInitialAccessPassword] = useState("");
   const [drivers, setDrivers] = useState<DemoDriver[]>(() =>
     getOnlineDrivers(),
   );
@@ -157,6 +506,40 @@ function RoleDashboard({
     capacity: "",
     compartments: "",
     notes: "",
+    cpf: "",
+    cnh: "",
+    cnh_category: "",
+    cnh_expires_at: "",
+    location_sharing_authorized: false,
+  });
+  const [registeredCompanies, setRegisteredCompanies] = useState(() =>
+    loadList<{ id: string; name: string; cnpj: string; status: string }>(
+      "acneto-transport-companies",
+      [],
+    ),
+  );
+  const [registeredVehicles, setRegisteredVehicles] = useState(() =>
+    loadList<{
+      id: string;
+      type: string;
+      plate: string;
+      capacity: string;
+      compartments: string;
+      products: string;
+      companyId: string;
+      driverId: string;
+      status: string;
+    }>("acneto-vehicles", []),
+  );
+  const [companyForm, setCompanyForm] = useState({ name: "", cnpj: "" });
+  const [vehicleForm, setVehicleForm] = useState({
+    type: "",
+    plate: "",
+    capacity: "",
+    compartments: "",
+    products: "",
+    companyId: "",
+    driverId: "",
   });
   const [tab, setTab] = useState<
     "resumo" | "cadastros" | "localizacao" | "conta" | "solicitacoes"
@@ -174,14 +557,28 @@ function RoleDashboard({
   const [statusFilter, setStatusFilter] = useState<string>("Todos");
   const [locationClientSearch, setLocationClientSearch] = useState("");
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
+  const [pendingVehicles, setPendingVehicles] = useState<
+    Array<{
+      id: string;
+      type: string;
+      plate: string;
+      capacity: string | null;
+      products: string[];
+      company: { name?: string; legal_name?: string } | null;
+      status: string;
+    }>
+  >([]);
   const [registrationRequests, setRegistrationRequests] = useState<
     PendingUser[]
   >([]);
   const [approvalRoles, setApprovalRoles] = useState<
-    Record<string, "driver" | "operator" | "admin">
+    Record<string, "driver" | "carrier" | "operator" | "admin">
   >({});
   const [approvalDriverFields, setApprovalDriverFields] = useState<
     Record<string, ApprovalDriverFields>
+  >({});
+  const [initialPasswords, setInitialPasswords] = useState<
+    Record<string, string>
   >({});
   const [directory, setDirectory] = useState<
     "clients" | "operators" | "drivers"
@@ -191,6 +588,13 @@ function RoleDashboard({
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [editingDriverId, setEditingDriverId] = useState<string | null>(null);
   const [driverFormError, setDriverFormError] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formSuccess, setFormSuccess] = useState<string | null>(null);
+  const [pendingRejection, setPendingRejection] = useState<PendingUser | null>(
+    null,
+  );
+
+  const showFormError = (message: string) => setFormError(message);
 
   useEffect(() => {
     saveList("acneto-clients", clients);
@@ -205,6 +609,14 @@ function RoleDashboard({
       saveList("acneto-drivers", drivers);
     }
   }, [drivers]);
+
+  useEffect(() => {
+    saveList("acneto-transport-companies", registeredCompanies);
+  }, [registeredCompanies]);
+
+  useEffect(() => {
+    saveList("acneto-vehicles", registeredVehicles);
+  }, [registeredVehicles]);
 
   useEffect(() => {
     const token = localStorage.getItem("acneto-access-token");
@@ -249,6 +661,7 @@ function RoleDashboard({
                 kind: location.kind,
                 name: location.name,
                 email: location.email ?? "",
+                phone: location.phone,
                 region: location.city ?? location.state ?? "",
                 accessLevel: "cliente" as const,
                 status: "ativo" as const,
@@ -309,6 +722,7 @@ function RoleDashboard({
                     kind: location.kind,
                     name: location.name,
                     email: location.email ?? "",
+                    phone: location.phone,
                     region: location.city ?? location.state ?? "",
                     accessLevel: "cliente" as const,
                     status: "ativo" as const,
@@ -360,21 +774,38 @@ function RoleDashboard({
           setApprovalDriverFields((current) => {
             const next = { ...current };
             body.users.forEach((pendingUser) => {
-              if (!next[pendingUser.id]) {
-                next[pendingUser.id] = {
-                  full_name: pendingUser.full_name ?? "",
-                  phone: pendingUser.phone ?? "",
-                  vehicle_model: "",
-                  plate: "",
-                  city: "",
-                  state: "",
-                  capacity: "",
-                  compartments: "",
-                };
-              }
+              const driver = pendingUser.driver;
+              next[pendingUser.id] = {
+                full_name: driver?.full_name ?? pendingUser.full_name ?? "",
+                phone: driver?.phone ?? pendingUser.phone ?? "",
+                vehicle_model: driver?.vehicle_model ?? "",
+                vehicle_year: driver?.vehicle_year
+                  ? String(driver.vehicle_year)
+                  : "",
+                plate: driver?.plate ?? "",
+                city: driver?.city ?? "",
+                state: driver?.state ?? "",
+                capacity: driver?.capacity ?? "",
+                compartments: driver?.compartments ?? "",
+                cpf: driver?.cpf ?? "",
+                cnh: driver?.cnh ?? "",
+                cnh_category: driver?.cnh_category ?? "",
+                cnh_expires_at: driver?.cnh_expires_at?.slice(0, 10) ?? "",
+                location_sharing_authorized:
+                  driver?.location_sharing_authorized ?? false,
+              };
             });
             return next;
           });
+        }
+        const vehicleResponse = await apiFetch("/api/admin/pending-vehicles", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (vehicleResponse.ok && active) {
+          const body = (await vehicleResponse.json()) as {
+            vehicles: typeof pendingVehicles;
+          };
+          setPendingVehicles(body.vehicles);
         }
       } catch {
         // A falha temporária não interrompe a próxima atualização automática.
@@ -408,6 +839,32 @@ function RoleDashboard({
         if (response.ok && active) {
           const body = (await response.json()) as { users: PendingUser[] };
           setRegistrationRequests(body.users);
+          setApprovalDriverFields((current) => {
+            const next = { ...current };
+            body.users.forEach((pendingUser) => {
+              const driver = pendingUser.driver;
+              next[pendingUser.id] = {
+                full_name: driver?.full_name ?? pendingUser.full_name ?? "",
+                phone: driver?.phone ?? pendingUser.phone ?? "",
+                vehicle_model: driver?.vehicle_model ?? "",
+                vehicle_year: driver?.vehicle_year
+                  ? String(driver.vehicle_year)
+                  : "",
+                plate: driver?.plate ?? "",
+                city: driver?.city ?? "",
+                state: driver?.state ?? "",
+                capacity: driver?.capacity ?? "",
+                compartments: driver?.compartments ?? "",
+                cpf: driver?.cpf ?? "",
+                cnh: driver?.cnh ?? "",
+                cnh_category: driver?.cnh_category ?? "",
+                cnh_expires_at: driver?.cnh_expires_at?.slice(0, 10) ?? "",
+                location_sharing_authorized:
+                  driver?.location_sharing_authorized ?? false,
+              };
+            });
+            return next;
+          });
         }
       } catch {
         // A próxima atualização automática tentará novamente.
@@ -426,12 +883,42 @@ function RoleDashboard({
     if (!token) return;
     const role = approvalRoles[pendingUser.id] ?? pendingUser.requested_role;
     const fields = approvalDriverFields[pendingUser.id];
+    const initialPassword = initialPasswords[pendingUser.id] ?? "";
+    if (["operator", "admin"].includes(role) && initialPassword.length < 8) {
+      showFormError("Informe uma senha inicial com no mínimo 8 caracteres.");
+      return;
+    }
+    const publicDriverRequest = role === "driver" && !pendingUser.company_id;
+    const requiredPublicDriverFields = fields
+      ? [
+          fields.full_name,
+          fields.phone,
+          fields.cpf,
+          fields.cnh,
+          fields.cnh_category,
+          fields.cnh_expires_at,
+          fields.vehicle_model,
+          fields.plate,
+          fields.vehicle_year,
+          fields.city,
+          fields.state,
+          fields.capacity,
+          fields.compartments,
+        ]
+      : [];
     if (
       role === "driver" &&
-      (!fields || Object.values(fields).some((value) => !value.trim()))
+      (!fields ||
+        (publicDriverRequest
+          ? requiredPublicDriverFields.some(
+              (value) => !String(value ?? "").trim(),
+            )
+          : !fields.full_name.trim() || !fields.phone.trim()))
     ) {
-      window.alert(
-        "Preencha todos os campos obrigatórios do motorista antes de aprovar.",
+      showFormError(
+        publicDriverRequest
+          ? "Preencha todos os dados pessoais, CNH e veículo do motorista antes de aprovar."
+          : "Preencha nome e telefone do motorista antes de aprovar. O veículo é opcional.",
       );
       return;
     }
@@ -445,6 +932,9 @@ function RoleDashboard({
         },
         body: JSON.stringify({
           role,
+          initialPassword: ["operator", "admin"].includes(role)
+            ? initialPassword
+            : undefined,
           driver: fields
             ? {
                 fullName: fields.full_name,
@@ -455,6 +945,12 @@ function RoleDashboard({
                 state: fields.state,
                 capacity: fields.capacity,
                 compartments: fields.compartments,
+                cpf: fields.cpf,
+                cnh: fields.cnh,
+                cnhCategory: fields.cnh_category,
+                cnhExpiresAt: fields.cnh_expires_at,
+                vehicleYear: fields.vehicle_year,
+                locationSharingAuthorized: fields.location_sharing_authorized,
               }
             : undefined,
         }),
@@ -466,8 +962,37 @@ function RoleDashboard({
       );
     } else {
       const body = (await response.json()) as { error?: string };
-      window.alert(body.error ?? "Não foi possível finalizar a aprovação.");
+      showFormError(body.error ?? "Não foi possível finalizar a aprovação.");
     }
+  };
+
+  const rejectUser = async (pendingUser: PendingUser) => {
+    const token = localStorage.getItem("acneto-access-token");
+    if (!token) return;
+    const response = await apiFetch(
+      `/api/admin/users/${pendingUser.id}/reject`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string };
+      showFormError(body.error ?? "Não foi possível rejeitar o cadastro.");
+      return;
+    }
+    setPendingUsers((current) =>
+      current.filter((user) => user.id !== pendingUser.id),
+    );
+    setRegistrationRequests((current) =>
+      current.filter((user) => user.id !== pendingUser.id),
+    );
+    setApprovalDriverFields((current) => {
+      const next = { ...current };
+      delete next[pendingUser.id];
+      return next;
+    });
+    setPendingRejection(null);
   };
 
   const setApprovalClosed = async (userId: string, closed: boolean) => {
@@ -496,7 +1021,10 @@ function RoleDashboard({
     }
   };
 
-  const onlineDrivers = drivers.filter(isDriverCurrentlyOnline);
+  const onlineDrivers = useMemo(
+    () => drivers.filter(isDriverCurrentlyOnline),
+    [drivers],
+  );
   const filteredDrivers = useMemo(() => {
     return onlineDrivers
       .filter(
@@ -648,7 +1176,7 @@ function RoleDashboard({
 
   useEffect(() => {
     if (!filteredDrivers.length) {
-      setSelectedDriverId(null);
+      setSelectedDriverId((current) => (current === null ? current : null));
       return;
     }
 
@@ -667,10 +1195,10 @@ function RoleDashboard({
     );
     if (selectedDriverIsActive) return;
 
-    setSelectedClientIds([]);
-    setRoutePath([]);
-    setRouteSummary(null);
-    setRouteError("");
+    setSelectedClientIds((current) => (current.length ? [] : current));
+    setRoutePath((current) => (current.length ? [] : current));
+    setRouteSummary((current) => (current === null ? current : null));
+    setRouteError((current) => (current ? "" : current));
   }, [filteredDrivers, selectedDriverId]);
 
   useEffect(() => {
@@ -679,13 +1207,105 @@ function RoleDashboard({
     }
   }, [selectedClientIds.length, selectedDriverId]);
 
-  const handleAdd = async () => {
-    if (!name.trim() || !email.trim()) return;
+  const geocodeAddress = async (address: string, city: string) => {
+    const query = [address, city].filter(Boolean).join(", ");
+    if (!query) return null;
+
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`,
+      );
+      if (!response.ok) return null;
+
+      const results = (await response.json()) as Array<{
+        lat?: string;
+        lon?: string;
+      }>;
+      const match = results[0];
+      if (!match?.lat || !match?.lon) return null;
+
+      return {
+        latitude: Number(match.lat),
+        longitude: Number(match.lon),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const handleAdd = async (requestedAccessLevel: AccessLevel = accessLevel) => {
+    if (!name.trim() || !email.trim()) {
+      showFormError("Preencha nome e e-mail antes de salvar o cadastro.");
+      return;
+    }
 
     if (
-      accessLevel === "cliente" &&
+      role === "admin" &&
+      ["operador", "admin"].includes(requestedAccessLevel)
+    ) {
+      if (initialAccessPassword.length < 8) {
+        showFormError("Informe uma senha inicial com no mínimo 8 caracteres.");
+        return;
+      }
+      const token = localStorage.getItem("acneto-access-token");
+      const response = await apiFetch("/api/admin/users", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token ?? ""}`,
+        },
+        body: JSON.stringify({
+          fullName: name.trim(),
+          email: email.trim(),
+          phone: region.trim(),
+          role: requestedAccessLevel === "operador" ? "operator" : "admin",
+          initialPassword: initialAccessPassword,
+        }),
+      });
+      if (!response.ok) {
+        const body = (await response.json()) as { error?: string };
+        showFormError(body.error ?? "Não foi possível criar o acesso.");
+        return;
+      }
+      setName("");
+      setEmail("");
+      setRegion("");
+      setInitialAccessPassword("");
+      setFormSuccess(
+        requestedAccessLevel === "admin"
+          ? "Administrador criado com sucesso. Ele deverá trocar a senha no primeiro acesso."
+          : "Operador criado com sucesso. Ele deverá trocar a senha no primeiro acesso.",
+      );
+      return;
+    }
+
+    if (
+      requestedAccessLevel === "cliente" &&
       localStorage.getItem("acneto-access-token")
     ) {
+      const addressText = locationAddress.trim();
+      const cityText = region.trim();
+
+      if (!locationPhone.trim()) {
+        showFormError("Informe o WhatsApp do cliente ou posto de coleta.");
+        return;
+      }
+
+      if (!addressText) {
+        showFormError(
+          "Informe o endereço completo do cliente antes de salvar.",
+        );
+        return;
+      }
+
+      const coordinates = await geocodeAddress(addressText, cityText);
+      if (!coordinates) {
+        showFormError(
+          "Não foi possível localizar este endereço. Informe um endereço mais completo ou uma rua/cidade válida.",
+        );
+        return;
+      }
+
       const response = await apiFetch("/api/operations/locations", {
         method: "POST",
         headers: {
@@ -696,21 +1316,28 @@ function RoleDashboard({
           kind: locationKind,
           name: name.trim(),
           email: email.trim(),
-          address: locationAddress.trim(),
-          city: region.trim(),
-          latitude: locationLatitude ? Number(locationLatitude) : null,
-          longitude: locationLongitude ? Number(locationLongitude) : null,
+          phone: locationPhone.trim(),
+          address: addressText,
+          city: cityText,
+          latitude: coordinates.latitude,
+          longitude: coordinates.longitude,
         }),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        const body = (await response.json()) as { error?: string };
+        showFormError(body.error ?? "Não foi possível salvar o cliente.");
+        return;
+      }
       const body = (await response.json()) as { location: DemoContact };
       setClients((items) => [body.location, ...items]);
       setName("");
       setEmail("");
+      setLocationPhone("");
       setRegion("");
       setLocationAddress("");
       setLocationLatitude("");
       setLocationLongitude("");
+      setFormSuccess("Cadastro criado com sucesso.");
       return;
     }
 
@@ -719,7 +1346,7 @@ function RoleDashboard({
       name: name.trim(),
       email: email.trim(),
       region: region.trim(),
-      accessLevel,
+      accessLevel: requestedAccessLevel,
       status: "ativo",
       latitude: null,
       longitude: null,
@@ -741,7 +1368,7 @@ function RoleDashboard({
         ),
       );
       setEditingContactId(null);
-    } else if (accessLevel === "cliente") {
+    } else if (requestedAccessLevel === "cliente") {
       setClients((prev) => [newEntry, ...prev]);
     } else {
       setOperators((prev) => [newEntry, ...prev]);
@@ -760,6 +1387,7 @@ function RoleDashboard({
     setEditingContactId(contact.id);
     setName(contact.name);
     setEmail(contact.email);
+    setLocationPhone(contact.phone ?? "");
     setRegion(contact.region);
     setAccessLevel(contact.accessLevel);
     setTab("cadastros");
@@ -785,6 +1413,11 @@ function RoleDashboard({
       capacity: driver.capacity ?? "",
       compartments: driver.compartments ?? "",
       notes: driver.notes ?? "",
+      cpf: driver.cpf ?? "",
+      cnh: driver.cnh ?? "",
+      cnh_category: driver.cnh_category ?? "",
+      cnh_expires_at: driver.cnh_expires_at?.slice(0, 10) ?? "",
+      location_sharing_authorized: driver.location_sharing_authorized ?? false,
     });
     setTab("cadastros");
   };
@@ -805,16 +1438,13 @@ function RoleDashboard({
   const handleAddDriver = () => {
     const requiredDriverFields = [
       driverForm.full_name,
-      driverForm.vehicle_model,
       driverForm.city,
       driverForm.state,
-      driverForm.plate,
       driverForm.phone,
-      driverForm.capacity,
-      driverForm.compartments,
     ];
     if (requiredDriverFields.some((field) => !field.trim())) {
       setDriverFormError("Preencha todos os campos obrigatórios do motorista.");
+      showFormError("Preencha todos os campos obrigatórios do motorista.");
       return;
     }
     setDriverFormError("");
@@ -837,6 +1467,14 @@ function RoleDashboard({
       status: "available",
       latitude: null,
       longitude: null,
+      cpf: driverForm.cpf.trim() || null,
+      cnh: driverForm.cnh.trim() || null,
+      cnh_category: driverForm.cnh_category.trim() || null,
+      cnh_expires_at: driverForm.cnh_expires_at || null,
+      location_sharing_authorized: driverForm.location_sharing_authorized,
+      homologation_status: "in_analysis",
+      current_vehicle: null,
+      carrier: null,
     };
 
     if (editingDriverId) {
@@ -859,6 +1497,11 @@ function RoleDashboard({
             capacity: newDriver.capacity,
             compartments: newDriver.compartments,
             notes: newDriver.notes,
+            cpf: newDriver.cpf,
+            cnh: newDriver.cnh,
+            cnhCategory: newDriver.cnh_category,
+            cnhExpiresAt: newDriver.cnh_expires_at,
+            locationSharingAuthorized: newDriver.location_sharing_authorized,
           }),
         });
       }
@@ -877,6 +1520,12 @@ function RoleDashboard({
                 capacity: newDriver.capacity,
                 compartments: newDriver.compartments,
                 notes: newDriver.notes,
+                cpf: newDriver.cpf,
+                cnh: newDriver.cnh,
+                cnh_category: newDriver.cnh_category,
+                cnh_expires_at: newDriver.cnh_expires_at,
+                location_sharing_authorized:
+                  newDriver.location_sharing_authorized,
               }
             : item,
         ),
@@ -896,6 +1545,42 @@ function RoleDashboard({
       capacity: "",
       compartments: "",
       notes: "",
+      cpf: "",
+      cnh: "",
+      cnh_category: "",
+      cnh_expires_at: "",
+      location_sharing_authorized: false,
+    });
+  };
+
+  const addCompany = () => {
+    if (!companyForm.name.trim()) return;
+    setRegisteredCompanies((items) => [
+      {
+        id: crypto.randomUUID(),
+        name: companyForm.name.trim(),
+        cnpj: companyForm.cnpj.trim(),
+        status: "active",
+      },
+      ...items,
+    ]);
+    setCompanyForm({ name: "", cnpj: "" });
+  };
+
+  const addVehicle = () => {
+    if (!vehicleForm.type.trim() || !vehicleForm.plate.trim()) return;
+    setRegisteredVehicles((items) => [
+      { id: crypto.randomUUID(), ...vehicleForm, status: "in_analysis" },
+      ...items,
+    ]);
+    setVehicleForm({
+      type: "",
+      plate: "",
+      capacity: "",
+      compartments: "",
+      products: "",
+      companyId: "",
+      driverId: "",
     });
   };
 
@@ -921,6 +1606,32 @@ function RoleDashboard({
 
   return (
     <div className="min-h-screen bg-[#f5f7fa] p-4 sm:p-6">
+      <ConfirmationModal
+        open={Boolean(formError)}
+        title="Revise os dados"
+        message={formError ?? ""}
+        actionLabel="Corrigir"
+        onClose={() => setFormError(null)}
+      />
+      <ConfirmationModal
+        open={Boolean(formSuccess)}
+        title="Cadastro concluído"
+        message={formSuccess ?? ""}
+        actionLabel="Continuar"
+        onClose={() => setFormSuccess(null)}
+      />
+      <ConfirmationModal
+        open={Boolean(pendingRejection)}
+        title="Rejeitar cadastro?"
+        message={`Esta ação excluirá permanentemente a solicitação de ${pendingRejection?.full_name ?? pendingRejection?.email ?? "usuário"} e todos os dados pendentes relacionados.`}
+        actionLabel="Sim, rejeitar e excluir"
+        cancelLabel="Cancelar"
+        destructive
+        onClose={() => {
+          if (pendingRejection) void rejectUser(pendingRejection);
+        }}
+        onCancel={() => setPendingRejection(null)}
+      />
       <div className="mx-auto max-w-7xl">
         <header className="mb-6 flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
@@ -942,6 +1653,7 @@ function RoleDashboard({
 
           <div className="flex items-center gap-2">
             <ThemeToggle />
+            <AppDownloadButton />
             <button
               onClick={() => onSignOut()}
               className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-100"
@@ -951,7 +1663,9 @@ function RoleDashboard({
           </div>
         </header>
 
-        <section className="mb-6 grid gap-4 md:grid-cols-3">
+        <section
+          className={`mb-6 grid gap-4 ${role === "admin" ? "md:grid-cols-3" : "md:grid-cols-2"}`}
+        >
           <MetricCard
             icon={Users}
             label="Clientes"
@@ -959,13 +1673,15 @@ function RoleDashboard({
             active={directory === "clients"}
             onClick={() => setDirectory("clients")}
           />
-          <MetricCard
-            icon={Briefcase}
-            label="Operadores"
-            value={String(totalOperators)}
-            active={directory === "operators"}
-            onClick={() => setDirectory("operators")}
-          />
+          {role === "admin" && (
+            <MetricCard
+              icon={Briefcase}
+              label="Operadores"
+              value={String(totalOperators)}
+              active={directory === "operators"}
+              onClick={() => setDirectory("operators")}
+            />
+          )}
           <MetricCard
             icon={Truck}
             label="Motoristas online"
@@ -976,7 +1692,7 @@ function RoleDashboard({
         </section>
 
         <div
-          className={`mb-6 grid gap-1 rounded-xl bg-slate-100 p-1 ${role === "admin" ? "grid-cols-5" : "grid-cols-4"}`}
+          className={`mb-6 grid gap-1 rounded-xl bg-slate-100 p-1 ${role === "admin" || role === "operator" ? "grid-cols-5" : "grid-cols-4"}`}
         >
           <button
             onClick={() => setTab("resumo")}
@@ -988,16 +1704,21 @@ function RoleDashboard({
           >
             Resumo
           </button>
-          <button
-            onClick={() => setTab("cadastros")}
-            className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
-              tab === "cadastros"
-                ? "bg-white text-[#0b1d3a] shadow-sm"
-                : "text-slate-500"
-            }`}
-          >
-            Cadastros
-          </button>
+          {(role === "admin" || role === "operator") && (
+            <button
+              onClick={() => {
+                if (role === "operator") setRegistrationTab("drivers");
+                setTab("cadastros");
+              }}
+              className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
+                tab === "cadastros"
+                  ? "bg-white text-[#0b1d3a] shadow-sm"
+                  : "text-slate-500"
+              }`}
+            >
+              Cadastros
+            </button>
+          )}
           <button
             onClick={() => {
               setLocationSearch("");
@@ -1023,7 +1744,7 @@ function RoleDashboard({
           >
             Meus dados
           </button>
-          {role === "admin" && (
+          {(role === "admin" || role === "operator") && (
             <button
               onClick={() => setTab("solicitacoes")}
               className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
@@ -1032,7 +1753,7 @@ function RoleDashboard({
                   : "text-slate-500"
               }`}
             >
-              <span>Solicitações</span>
+              <span>{role === "admin" ? "Solicitações" : "Aprovações"}</span>
               {pendingUsers.length > 0 && (
                 <span className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
                   {pendingUsers.length}
@@ -1049,190 +1770,9 @@ function RoleDashboard({
               search={locationSearch}
               onSearch={setLocationSearch}
               matchedDrivers={locationDrivers}
-              matchedOperators={locationOperators}
+              matchedOperators={role === "admin" ? locationOperators : []}
               onEditDriver={editDriver}
             />
-            <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex items-center gap-2">
-                  <UserPlus size={18} className="text-[#1052c7]" />
-                  <h2 className="text-lg font-bold text-[#0b1d3a]">
-                    {role === "admin"
-                      ? "Cadastrar operador ou cliente"
-                      : "Cadastrar cliente"}
-                  </h2>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Nome"
-                    className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  />
-                  <input
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="E-mail"
-                    className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  />
-                  <input
-                    value={region}
-                    onChange={(e) => setRegion(e.target.value)}
-                    placeholder="Região"
-                    className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  />
-                  <select
-                    value={accessLevel}
-                    onChange={(e) =>
-                      setAccessLevel(e.target.value as AccessLevel)
-                    }
-                    className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  >
-                    {role === "admin" ? (
-                      <>
-                        <option value="operador">Operador</option>
-                        <option value="cliente">Cliente</option>
-                      </>
-                    ) : (
-                      <option value="cliente">Cliente</option>
-                    )}
-                  </select>
-                </div>
-
-                <button
-                  onClick={handleAdd}
-                  className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#0e4db7] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/15 transition hover:bg-[#0a3a90]"
-                >
-                  Salvar cadastro <ArrowRight size={15} />
-                </button>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex items-center gap-2">
-                  <Bell size={18} className="text-emerald-600" />
-                  <h2 className="text-lg font-bold text-[#0b1d3a]">
-                    Motoristas visíveis
-                  </h2>
-                </div>
-
-                <div className="space-y-3">
-                  {onlineDrivers.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      Nenhum motorista online no momento.
-                    </div>
-                  ) : (
-                    onlineDrivers
-                      .filter((driver) => driver.is_online)
-                      .map((driver) => (
-                        <div
-                          key={driver.id}
-                          className="rounded-xl border border-slate-200 p-3"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div>
-                              <p className="font-semibold text-[#0b1d3a]">
-                                {driver.full_name}
-                              </p>
-                              <p className="text-xs text-slate-500">
-                                {driver.city} · {driver.state}
-                              </p>
-                            </div>
-                            <span
-                              className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold ${driver.is_online ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}
-                            >
-                              <span
-                                className={`h-1.5 w-1.5 rounded-full ${driver.is_online ? "bg-emerald-500" : "bg-slate-400"}`}
-                              />
-                              {statusLabel(driver.status)}
-                            </span>
-                          </div>
-                          <div className="mt-3 flex justify-end gap-1 border-t border-slate-100 pt-2">
-                            {role === "admin" && (
-                              <div
-                                className="mr-auto flex items-center gap-0.5"
-                                aria-label={`Avaliação: ${driver.rating} de 5 estrelas`}
-                              >
-                                {[1, 2, 3, 4, 5].map((star) => (
-                                  <button
-                                    key={star}
-                                    type="button"
-                                    onClick={() =>
-                                      void rateDriver(driver, star)
-                                    }
-                                    className="rounded p-1 text-amber-400 transition hover:bg-amber-50"
-                                    aria-label={`Dar ${star} estrela${star > 1 ? "s" : ""}`}
-                                    title={`Avaliar com ${star} estrela${star > 1 ? "s" : ""}`}
-                                  >
-                                    <Star
-                                      size={15}
-                                      fill={
-                                        star <= Math.round(driver.rating)
-                                          ? "currentColor"
-                                          : "none"
-                                      }
-                                    />
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => editDriver(driver)}
-                              className="rounded-lg p-2 text-slate-500 transition hover:bg-blue-50 hover:text-blue-700"
-                              aria-label={`Editar ${driver.full_name}`}
-                              title="Editar motorista"
-                            >
-                              <Pencil size={15} />
-                            </button>
-                            {role === "admin" && (
-                              <button
-                                type="button"
-                                onClick={() => void removeDriver(driver)}
-                                className="rounded-lg p-2 text-slate-500 transition hover:bg-rose-50 hover:text-rose-700"
-                                aria-label={`Excluir ${driver.full_name}`}
-                                title="Excluir motorista"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            )}
-                          </div>
-                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-500">
-                            <span>
-                              {driver.vehicle_model} · {driver.plate}
-                            </span>
-                            <span>
-                              {driver.capacity} · {driver.compartments}
-                            </span>
-                            {whatsappHref(driver.phone) ? (
-                              <a
-                                href={whatsappHref(driver.phone) ?? undefined}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1 font-semibold text-emerald-600 hover:text-emerald-700"
-                                title="Abrir conversa no WhatsApp Web"
-                              >
-                                <Phone size={13} /> {driver.phone}
-                              </a>
-                            ) : (
-                              <span>Telefone não informado</span>
-                            )}
-                            <span className="text-right">
-                              Desde{" "}
-                              {formatAvailability(driver.availability_since)}
-                            </span>
-                          </div>
-                          {driver.notes && (
-                            <p className="mt-2 text-xs text-slate-500">
-                              {driver.notes}
-                            </p>
-                          )}
-                        </div>
-                      ))
-                  )}
-                </div>
-              </div>
-            </section>
 
             <section className="mt-6">
               <DirectoryPanel
@@ -1251,246 +1791,524 @@ function RoleDashboard({
             </section>
           </>
         ) : tab === "cadastros" ? (
-          <div className="grid gap-6 xl:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-center gap-2">
-                <Truck size={18} className="text-[#1052c7]" />
-                <h2 className="text-lg font-bold text-[#0b1d3a]">
-                  Cadastar motorista
-                </h2>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <input
-                  value={driverForm.full_name}
-                  onChange={(e) =>
-                    setDriverForm((prev) => ({
-                      ...prev,
-                      full_name: e.target.value,
-                    }))
-                  }
-                  placeholder="Nome do motorista"
-                  required
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <input
-                  type="email"
-                  value={driverForm.email}
-                  onChange={(e) =>
-                    setDriverForm((prev) => ({
-                      ...prev,
-                      email: e.target.value,
-                    }))
-                  }
-                  placeholder="E-mail do cadastro"
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <input
-                  value={driverForm.vehicle_model}
-                  onChange={(e) =>
-                    setDriverForm((prev) => ({
-                      ...prev,
-                      vehicle_model: e.target.value,
-                    }))
-                  }
-                  placeholder="Veículo"
-                  required
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <input
-                  value={driverForm.city}
-                  onChange={(e) =>
-                    setDriverForm((prev) => ({ ...prev, city: e.target.value }))
-                  }
-                  placeholder="Cidade"
-                  required
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <input
-                  value={driverForm.state}
-                  onChange={(e) =>
-                    setDriverForm((prev) => ({
-                      ...prev,
-                      state: e.target.value,
-                    }))
-                  }
-                  placeholder="UF"
-                  required
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <input
-                  value={driverForm.plate}
-                  onChange={(e) =>
-                    setDriverForm((prev) => ({
-                      ...prev,
-                      plate: e.target.value,
-                    }))
-                  }
-                  placeholder="Placa"
-                  required
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
-                />
-                <input
-                  value={driverForm.phone}
-                  onChange={(e) =>
-                    setDriverForm((prev) => ({
-                      ...prev,
-                      phone: e.target.value,
-                    }))
-                  }
-                  placeholder="Telefone"
-                  required
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <input
-                  value={driverForm.capacity}
-                  onChange={(e) =>
-                    setDriverForm((prev) => ({
-                      ...prev,
-                      capacity: e.target.value,
-                    }))
-                  }
-                  placeholder="Capacidade (ex.: 30.000 L)"
-                  required
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <input
-                  value={driverForm.compartments}
-                  onChange={(e) =>
-                    setDriverForm((prev) => ({
-                      ...prev,
-                      compartments: e.target.value,
-                    }))
-                  }
-                  placeholder="Compartimentação"
-                  required
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <textarea
-                  value={driverForm.notes}
-                  onChange={(e) =>
-                    setDriverForm((prev) => ({
-                      ...prev,
-                      notes: e.target.value,
-                    }))
-                  }
-                  placeholder="Observações sobre manutenção, documentos ou liberação"
-                  rows={2}
-                  className="resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
-                />
-              </div>
-
-              {driverFormError && (
-                <p className="mt-3 text-sm font-semibold text-rose-600">
-                  {driverFormError}
-                </p>
-              )}
-
-              <button
-                onClick={handleAddDriver}
-                className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#0e4db7] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/15 transition hover:bg-[#0a3a90]"
-              >
-                Salvar motorista <ArrowRight size={15} />
-              </button>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-center gap-2">
-                <UserPlus size={18} className="text-[#1052c7]" />
-                <h2 className="text-lg font-bold text-[#0b1d3a]">
-                  {role === "admin"
-                    ? "Cadastrar operador ou administrador"
-                    : "Cadastrar acessos do operador"}
-                </h2>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Nome"
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <input
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="E-mail"
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                <input
-                  value={region}
-                  onChange={(e) => setRegion(e.target.value)}
-                  placeholder="Região"
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-                {accessLevel === "cliente" && (
-                  <>
-                    <select
-                      value={locationKind}
-                      onChange={(e) =>
-                        setLocationKind(
-                          e.target.value as
-                            | "collection_point"
-                            | "final_customer",
-                        )
-                      }
-                      className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    >
-                      <option value="collection_point">Posto de coleta</option>
-                      <option value="final_customer">Cliente final</option>
-                    </select>
-                    <input
-                      value={locationAddress}
-                      onChange={(e) => setLocationAddress(e.target.value)}
-                      placeholder="Endereço do ponto"
-                      className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
-                    />
-                    <input
-                      value={locationLatitude}
-                      onChange={(e) => setLocationLatitude(e.target.value)}
-                      placeholder="Latitude GPS"
-                      inputMode="decimal"
-                      className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    />
-                    <input
-                      value={locationLongitude}
-                      onChange={(e) => setLocationLongitude(e.target.value)}
-                      placeholder="Longitude GPS"
-                      inputMode="decimal"
-                      className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    />
-                  </>
-                )}
-                <select
-                  value={accessLevel}
-                  onChange={(e) =>
-                    setAccessLevel(e.target.value as AccessLevel)
-                  }
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          <>
+            <div
+              className={`mb-5 grid gap-1 rounded-xl bg-slate-100 p-1 ${role === "admin" ? "grid-cols-3" : "grid-cols-2"}`}
+            >
+              {[
+                ["drivers", "Motoristas"],
+                ["vehicles", "Veículos"],
+                ...(role === "admin" ? [["companies", "Transportadoras"]] : []),
+                ...(role === "admin"
+                  ? [
+                      ["clients", "Clientes"],
+                      ["admins", "Administradores"],
+                    ]
+                  : [["clients", "Clientes"]]),
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    setRegistrationTab(value as typeof registrationTab);
+                    setAccessLevel(
+                      value === "admins"
+                        ? "admin"
+                        : value === "clients"
+                          ? "cliente"
+                          : "operador",
+                    );
+                  }}
+                  className={`rounded-lg py-2.5 text-sm font-semibold ${registrationTab === value ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
                 >
-                  {role === "admin" ? (
-                    <>
-                      <option value="admin">Administrador</option>
-                      <option value="operador">Operador</option>
-                      <option value="cliente">Cliente</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="cliente">Cliente</option>
-                      <option value="operador">Operador</option>
-                    </>
-                  )}
-                </select>
-              </div>
-
-              <button
-                onClick={handleAdd}
-                className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#0e4db7] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/15 transition hover:bg-[#0a3a90]"
-              >
-                Salvar acesso <ArrowRight size={15} />
-              </button>
+                  {label}
+                </button>
+              ))}
             </div>
-          </div>
+            {registrationTab === "companies" && (
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                <RegistrationCard
+                  title="Cadastrar transportadora"
+                  icon={Building2}
+                >
+                  <input
+                    value={companyForm.name}
+                    onChange={(e) =>
+                      setCompanyForm((form) => ({
+                        ...form,
+                        name: e.target.value,
+                      }))
+                    }
+                    placeholder="Razão social / nome"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={companyForm.cnpj}
+                    onChange={(e) =>
+                      setCompanyForm((form) => ({
+                        ...form,
+                        cnpj: e.target.value,
+                      }))
+                    }
+                    placeholder="CNPJ"
+                    className={registrationInputClass}
+                  />
+                  <button
+                    type="button"
+                    onClick={addCompany}
+                    className={registrationButtonClass}
+                  >
+                    Salvar transportadora <ArrowRight size={15} />
+                  </button>
+                </RegistrationCard>
+                <RegistrationList
+                  title="Transportadoras cadastradas"
+                  icon={Building2}
+                >
+                  {registeredCompanies.map((company) => (
+                    <RegistryRow
+                      key={company.id}
+                      title={company.name}
+                      detail={company.cnpj || "CNPJ não informado"}
+                      status={company.status}
+                    />
+                  ))}
+                </RegistrationList>
+              </div>
+            )}
+
+            {registrationTab === "vehicles" && (
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                <RegistrationCard title="Cadastrar veículo" icon={Truck}>
+                  <input
+                    value={vehicleForm.type}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        type: e.target.value,
+                      }))
+                    }
+                    placeholder="Tipo do veículo"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={vehicleForm.plate}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        plate: e.target.value.toUpperCase(),
+                      }))
+                    }
+                    placeholder="Placa do cavalo"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={vehicleForm.capacity}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        capacity: e.target.value,
+                      }))
+                    }
+                    placeholder="Capacidade total"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={vehicleForm.compartments}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        compartments: e.target.value,
+                      }))
+                    }
+                    placeholder="Compartimentação"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={vehicleForm.products}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        products: e.target.value,
+                      }))
+                    }
+                    placeholder="Produtos habilitados (separe por vírgula)"
+                    className={`${registrationInputClass} sm:col-span-2`}
+                  />
+                  <select
+                    value={vehicleForm.companyId}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        companyId: e.target.value,
+                      }))
+                    }
+                    className={`${registrationInputClass} sm:col-span-2`}
+                  >
+                    <option value="">Autônomo / sem transportadora</option>
+                    {registeredCompanies.map((company) => (
+                      <option key={company.id} value={company.id}>
+                        {company.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={vehicleForm.driverId}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        driverId: e.target.value,
+                      }))
+                    }
+                    className={`${registrationInputClass} sm:col-span-2`}
+                  >
+                    <option value="">Sem motorista vinculado</option>
+                    {directoryDrivers.map((driver) => (
+                      <option key={driver.id} value={driver.id}>
+                        {driver.full_name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={addVehicle}
+                    className={registrationButtonClass}
+                  >
+                    Salvar veículo <ArrowRight size={15} />
+                  </button>
+                </RegistrationCard>
+                <RegistrationList title="Veículos cadastrados" icon={Truck}>
+                  {registeredVehicles.map((vehicle) => (
+                    <RegistryRow
+                      key={vehicle.id}
+                      title={`${vehicle.plate} · ${vehicle.type}`}
+                      detail={`${vehicle.capacity || "Capacidade não informada"} · ${vehicle.products || "Produto não informado"} · ${directoryDrivers.find((driver) => driver.id === vehicle.driverId)?.full_name ?? "Sem motorista"}`}
+                      status={vehicle.status}
+                    />
+                  ))}
+                </RegistrationList>
+              </div>
+            )}
+
+            {registrationTab !== "vehicles" &&
+              registrationTab !== "companies" && (
+                <div className="grid gap-6 xl:grid-cols-2">
+                  <div
+                    className={`${registrationTab !== "drivers" ? "hidden " : ""}rounded-2xl border border-slate-200 bg-white p-5 shadow-sm`}
+                  >
+                    <div className="mb-4 flex items-center gap-2">
+                      <Truck size={18} className="text-[#1052c7]" />
+                      <h2 className="text-lg font-bold text-[#0b1d3a]">
+                        Cadastar motorista
+                      </h2>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <input
+                        value={driverForm.full_name}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            full_name: e.target.value,
+                          }))
+                        }
+                        placeholder="Nome do motorista"
+                        required
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        type="email"
+                        value={driverForm.email}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            email: e.target.value,
+                          }))
+                        }
+                        placeholder="E-mail do cadastro"
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        value={driverForm.cpf}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            cpf: e.target.value,
+                          }))
+                        }
+                        placeholder="CPF"
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        value={driverForm.cnh}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            cnh: e.target.value,
+                          }))
+                        }
+                        placeholder="CNH"
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        value={driverForm.cnh_category}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            cnh_category: e.target.value.toUpperCase(),
+                          }))
+                        }
+                        placeholder="Categoria da CNH"
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-600">
+                        <span className="text-xs font-semibold">
+                          Validade da CNH
+                        </span>
+                        <input
+                          type="date"
+                          value={driverForm.cnh_expires_at}
+                          onChange={(e) =>
+                            setDriverForm((prev) => ({
+                              ...prev,
+                              cnh_expires_at: e.target.value,
+                            }))
+                          }
+                          className="min-w-0 flex-1 bg-transparent outline-none"
+                        />
+                      </label>
+                      <input
+                        value={driverForm.vehicle_model}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            vehicle_model: e.target.value,
+                          }))
+                        }
+                        placeholder="Veículo"
+                        required
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        value={driverForm.city}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            city: e.target.value,
+                          }))
+                        }
+                        placeholder="Cidade"
+                        required
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        value={driverForm.state}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            state: e.target.value,
+                          }))
+                        }
+                        placeholder="UF"
+                        required
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        value={driverForm.plate}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            plate: e.target.value,
+                          }))
+                        }
+                        placeholder="Placa"
+                        required
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
+                      />
+                      <input
+                        value={driverForm.phone}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            phone: e.target.value,
+                          }))
+                        }
+                        placeholder="Telefone"
+                        required
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        value={driverForm.capacity}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            capacity: e.target.value,
+                          }))
+                        }
+                        placeholder="Capacidade (ex.: 30.000 L)"
+                        required
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        value={driverForm.compartments}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            compartments: e.target.value,
+                          }))
+                        }
+                        placeholder="Compartimentação"
+                        required
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <textarea
+                        value={driverForm.notes}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            notes: e.target.value,
+                          }))
+                        }
+                        placeholder="Observações sobre manutenção, documentos ou liberação"
+                        rows={2}
+                        className="resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
+                      />
+                      <label className="flex items-center gap-2 text-sm text-slate-600 sm:col-span-2">
+                        <input
+                          type="checkbox"
+                          checked={driverForm.location_sharing_authorized}
+                          onChange={(e) =>
+                            setDriverForm((prev) => ({
+                              ...prev,
+                              location_sharing_authorized: e.target.checked,
+                            }))
+                          }
+                        />
+                        Autoriza o compartilhamento da localização
+                      </label>
+                      <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5 text-xs text-blue-800 sm:col-span-2">
+                        <Link2 size={15} />
+                        <span>
+                          Veículo e transportadora são vinculados separadamente
+                          após o cadastro.
+                        </span>
+                      </div>
+                    </div>
+
+                    {driverFormError && (
+                      <p className="mt-3 text-sm font-semibold text-rose-600">
+                        {driverFormError}
+                      </p>
+                    )}
+
+                    <button
+                      onClick={handleAddDriver}
+                      className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#0e4db7] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/15 transition hover:bg-[#0a3a90]"
+                    >
+                      Salvar motorista <ArrowRight size={15} />
+                    </button>
+                  </div>
+
+                  <div
+                    className={`${registrationTab === "drivers" ? "hidden " : ""}rounded-2xl border border-slate-200 bg-white p-5 shadow-sm`}
+                  >
+                    <div className="mb-4 flex items-center gap-2">
+                      <UserPlus size={18} className="text-[#1052c7]" />
+                      <h2 className="text-lg font-bold text-[#0b1d3a]">
+                        {registrationTab === "clients"
+                          ? "Cadastrar cliente"
+                          : "Cadastrar administrador"}
+                      </h2>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <input
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Nome"
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="E-mail"
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        value={region}
+                        onChange={(e) => setRegion(e.target.value)}
+                        placeholder="Região"
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      {accessLevel === "cliente" && (
+                        <>
+                          <input
+                            value={locationPhone}
+                            onChange={(e) => setLocationPhone(e.target.value)}
+                            placeholder="WhatsApp / telefone"
+                            className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                          />
+                          <select
+                            value={locationKind}
+                            onChange={(e) =>
+                              setLocationKind(
+                                e.target.value as
+                                  | "collection_point"
+                                  | "final_customer",
+                              )
+                            }
+                            className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                          >
+                            <option value="collection_point">
+                              Posto de coleta
+                            </option>
+                            <option value="final_customer">
+                              Cliente final
+                            </option>
+                          </select>
+                          <input
+                            value={locationAddress}
+                            onChange={(e) => setLocationAddress(e.target.value)}
+                            placeholder="Endereço completo do ponto"
+                            className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
+                          />
+                        </>
+                      )}
+                      {registrationTab === "admins" && (
+                        <select
+                          value={accessLevel}
+                          onChange={(e) =>
+                            setAccessLevel(e.target.value as AccessLevel)
+                          }
+                          className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        >
+                          <option value="operador">Operador</option>
+                          <option value="admin">Administrador</option>
+                        </select>
+                      )}
+                      {role === "admin" && accessLevel !== "cliente" && (
+                        <input
+                          type="password"
+                          value={initialAccessPassword}
+                          onChange={(e) =>
+                            setInitialAccessPassword(e.target.value)
+                          }
+                          placeholder="Senha inicial (mínimo 8 caracteres)"
+                          className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
+                        />
+                      )}
+                    </div>
+
+                    <button
+                      onClick={() => void handleAdd()}
+                      className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#0e4db7] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/15 transition hover:bg-[#0a3a90]"
+                    >
+                      Salvar acesso <ArrowRight size={15} />
+                    </button>
+                  </div>
+                </div>
+              )}
+          </>
         ) : tab === "localizacao" ? (
           <LocationMapView
             drivers={filteredDrivers}
@@ -1513,23 +2331,56 @@ function RoleDashboard({
             onSelectDriver={setSelectedDriverId}
           />
         ) : tab === "solicitacoes" ? (
-          <ReusableRegistrationRequestsPanel
-            requests={registrationRequests}
-            approvalRoles={approvalRoles}
-            approvalDriverFields={approvalDriverFields}
-            onRoleChange={(userId, value) =>
-              setApprovalRoles((current) => ({ ...current, [userId]: value }))
-            }
-            onDriverFieldChange={(userId, field, value) =>
-              setApprovalDriverFields((current) => ({
-                ...current,
-                [userId]: { ...current[userId], [field]: value },
-              }))
-            }
-            onApprove={(request) => void approveUser(request)}
-            onClose={(userId) => void setApprovalClosed(userId, true)}
-            onReopen={(userId) => void setApprovalClosed(userId, false)}
-          />
+          <div className="space-y-5">
+            <PendingVehiclesPanel
+              vehicles={pendingVehicles}
+              onDecision={async (vehicleId, status) => {
+                const token = localStorage.getItem("acneto-access-token");
+                const response = await apiFetch(
+                  `/api/admin/vehicles/${vehicleId}/approval`,
+                  {
+                    method: "PATCH",
+                    headers: {
+                      "Content-Type": "application/json",
+                      Authorization: `Bearer ${token ?? ""}`,
+                    },
+                    body: JSON.stringify({ status }),
+                  },
+                );
+                if (response.ok)
+                  setPendingVehicles((items) =>
+                    items.filter((item) => item.id !== vehicleId),
+                  );
+              }}
+            />
+            <ReusableRegistrationRequestsPanel
+              requests={role === "admin" ? registrationRequests : pendingUsers}
+              approvalRoles={approvalRoles}
+              approvalDriverFields={approvalDriverFields}
+              initialPasswords={initialPasswords}
+              canManageRoles={role === "admin"}
+              canManageStatus={role === "admin" || role === "operator"}
+              onInitialPasswordChange={(userId, value) =>
+                setInitialPasswords((current) => ({
+                  ...current,
+                  [userId]: value,
+                }))
+              }
+              onRoleChange={(userId, value) =>
+                setApprovalRoles((current) => ({ ...current, [userId]: value }))
+              }
+              onDriverFieldChange={(userId, field, value) =>
+                setApprovalDriverFields((current) => ({
+                  ...current,
+                  [userId]: { ...current[userId], [field]: value },
+                }))
+              }
+              onApprove={(request) => void approveUser(request)}
+              onReject={(request) => setPendingRejection(request)}
+              onClose={(userId) => void setApprovalClosed(userId, true)}
+              onReopen={(userId) => void setApprovalClosed(userId, false)}
+            />
+          </div>
         ) : (
           <AccountCenter
             user={{
@@ -1545,6 +2396,86 @@ function RoleDashboard({
   );
 }
 
+function PendingVehiclesPanel({
+  vehicles,
+  onDecision,
+}: {
+  vehicles: Array<{
+    id: string;
+    type: string;
+    plate: string;
+    capacity: string | null;
+    products: string[];
+    company: { name?: string; legal_name?: string } | null;
+    status: string;
+  }>;
+  onDecision: (
+    vehicleId: string,
+    status: "active" | "rejected" | "blocked",
+  ) => Promise<void>;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-bold text-[#0b1d3a]">
+            Veículos aguardando homologação
+          </h2>
+          <p className="text-sm text-slate-500">
+            Aprovação central obrigatória para liberar a operação.
+          </p>
+        </div>
+        <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-700">
+          {vehicles.length}
+        </span>
+      </div>
+      {vehicles.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">
+          Nenhum veículo pendente.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {vehicles.map((vehicle) => (
+            <div
+              key={vehicle.id}
+              className="flex flex-col gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div>
+                <p className="font-semibold text-[#0b1d3a]">
+                  {vehicle.plate} · {vehicle.type}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {vehicle.company?.legal_name ??
+                    vehicle.company?.name ??
+                    "Transportadora"}{" "}
+                  · {vehicle.capacity ?? "Capacidade não informada"} ·{" "}
+                  {vehicle.products.join(", ") || "Sem produto informado"}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void onDecision(vehicle.id, "rejected")}
+                  className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700"
+                >
+                  Reprovar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onDecision(vehicle.id, "active")}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white"
+                >
+                  Aprovar
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function RegistrationRequestsPanel({
   requests,
   approvalRoles,
@@ -1556,11 +2487,11 @@ export function RegistrationRequestsPanel({
   onReopen,
 }: {
   requests: PendingUser[];
-  approvalRoles: Record<string, "driver" | "operator" | "admin">;
+  approvalRoles: Record<string, "driver" | "carrier" | "operator" | "admin">;
   approvalDriverFields: Record<string, ApprovalDriverFields>;
   onRoleChange: (
     userId: string,
-    value: "driver" | "operator" | "admin",
+    value: "driver" | "carrier" | "operator" | "admin",
   ) => void;
   onDriverFieldChange: (
     userId: string,
@@ -1810,6 +2741,80 @@ function formatRouteDuration(seconds: number): string {
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `${minutes} min estimados`;
   return `${Math.floor(minutes / 60)} h ${minutes % 60} min estimados`;
+}
+
+const registrationInputClass =
+  "rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
+
+const registrationButtonClass =
+  "inline-flex items-center justify-center gap-2 rounded-xl bg-[#0e4db7] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/15 transition hover:bg-[#0a3a90] sm:col-span-2";
+
+function RegistrationCard({
+  title,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  icon: typeof Truck;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <Icon size={18} className="text-[#1052c7]" />
+        <h2 className="text-lg font-bold text-[#0b1d3a]">{title}</h2>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">{children}</div>
+    </section>
+  );
+}
+
+function RegistrationList({
+  title,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  icon: typeof Truck;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <Icon size={18} className="text-[#1052c7]" />
+        <h2 className="text-lg font-bold text-[#0b1d3a]">{title}</h2>
+      </div>
+      <div className="space-y-2">{children}</div>
+    </section>
+  );
+}
+
+function RegistryRow({
+  title,
+  detail,
+  status,
+}: {
+  title: string;
+  detail: string;
+  status: string;
+}) {
+  const labels: Record<string, string> = {
+    active: "Ativo",
+    in_analysis: "Em análise",
+    rejected: "Reprovado",
+    blocked: "Bloqueado",
+  };
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-semibold text-[#0b1d3a]">{title}</p>
+        <p className="truncate text-xs text-slate-500">{detail}</p>
+      </div>
+      <span className="shrink-0 rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">
+        {labels[status] ?? status}
+      </span>
+    </div>
+  );
 }
 
 function LocationMapView({

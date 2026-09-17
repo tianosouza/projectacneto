@@ -4,18 +4,27 @@ export function RegistrationRequestsPanel({
   requests,
   approvalRoles,
   approvalDriverFields,
+  initialPasswords,
+  onInitialPasswordChange,
+  canManageRoles,
+  canManageStatus,
   onRoleChange,
   onDriverFieldChange,
   onApprove,
+  onReject,
   onClose,
   onReopen,
 }: {
   requests: PendingUser[];
-  approvalRoles: Record<string, "driver" | "operator" | "admin">;
+  approvalRoles: Record<string, "driver" | "carrier" | "operator" | "admin">;
   approvalDriverFields: Record<string, ApprovalDriverFields>;
+  initialPasswords: Record<string, string>;
+  onInitialPasswordChange: (userId: string, value: string) => void;
+  canManageRoles: boolean;
+  canManageStatus: boolean;
   onRoleChange: (
     userId: string,
-    value: "driver" | "operator" | "admin",
+    value: "driver" | "carrier" | "operator" | "admin",
   ) => void;
   onDriverFieldChange: (
     userId: string,
@@ -23,6 +32,7 @@ export function RegistrationRequestsPanel({
     value: string,
   ) => void;
   onApprove: (request: PendingUser) => void;
+  onReject: (request: PendingUser) => void;
   onClose: (userId: string) => void;
   onReopen: (userId: string) => void;
 }) {
@@ -68,7 +78,9 @@ export function RegistrationRequestsPanel({
                       Solicitação para{" "}
                       {request.requested_role === "operator"
                         ? "operador"
-                        : "motorista"}{" "}
+                        : request.requested_role === "carrier"
+                          ? "transportadora"
+                          : "motorista"}{" "}
                       · {new Date(request.created_at).toLocaleString("pt-BR")}
                     </p>
                     {request.registration_notes && (
@@ -86,74 +98,144 @@ export function RegistrationRequestsPanel({
                 {!request.approval_closed && (
                   <>
                     <div className="flex flex-col gap-2 sm:flex-row">
-                      <select
-                        value={selectedRole}
-                        onChange={(event) =>
-                          onRoleChange(
-                            request.id,
-                            event.target.value as
-                              | "driver"
-                              | "operator"
-                              | "admin",
-                          )
-                        }
-                        className="rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-700"
-                        aria-label={`Perfil de ${request.full_name ?? request.email}`}
-                      >
-                        <option value="driver">Motorista</option>
-                        <option value="operator">Operador</option>
-                        <option value="admin">Administrador</option>
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => onApprove(request)}
-                        className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
-                      >
-                        Aprovar cadastro
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onClose(request.id)}
-                        className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        Fechar aprovação
-                      </button>
+                      {canManageRoles && (
+                        <select
+                          value={selectedRole}
+                          onChange={(event) =>
+                            onRoleChange(
+                              request.id,
+                              event.target.value as
+                                | "driver"
+                                | "carrier"
+                                | "operator"
+                                | "admin",
+                            )
+                          }
+                          className="rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-700"
+                          aria-label={`Perfil de ${request.full_name ?? request.email}`}
+                        >
+                          <option value="driver">Motorista</option>
+                          <option value="carrier">Transportadora</option>
+                          <option value="operator">Operador</option>
+                          <option value="admin">Administrador</option>
+                        </select>
+                      )}
+                      {canManageStatus && (
+                        <button
+                          type="button"
+                          onClick={() => onApprove(request)}
+                          className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+                        >
+                          Aprovar cadastro
+                        </button>
+                      )}
+                      {canManageStatus && (
+                        <button
+                          type="button"
+                          onClick={() => onReject(request)}
+                          className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                        >
+                          Rejeitar cadastro
+                        </button>
+                      )}
+                      {canManageStatus && (
+                        <button
+                          type="button"
+                          onClick={() => onClose(request.id)}
+                          className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          Fechar aprovação
+                        </button>
+                      )}
                     </div>
                     {selectedRole === "driver" && (
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        {(
-                          [
-                            "full_name",
-                            "phone",
-                            "vehicle_model",
-                            "plate",
-                            "city",
-                            "state",
-                            "capacity",
-                            "compartments",
-                          ] as const
-                        ).map((field) => (
-                          <input
-                            key={field}
-                            value={
-                              approvalDriverFields[request.id]?.[field] ?? ""
-                            }
-                            onChange={(event) =>
-                              onDriverFieldChange(
-                                request.id,
-                                field,
-                                event.target.value,
-                              )
-                            }
-                            placeholder={`${fieldLabel[field]} *`}
-                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                          />
-                        ))}
-                      </div>
+                      <>
+                        {!request.driver && !request.company_id && (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                            Este cadastro foi criado sem os dados do motorista
+                            persistidos. Solicite um novo cadastro antes de
+                            aprovar.
+                          </div>
+                        )}
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {(
+                            [
+                              "full_name",
+                              "phone",
+                              "cpf",
+                              "cnh",
+                              "cnh_category",
+                              "cnh_expires_at",
+                              "vehicle_model",
+                              "vehicle_year",
+                              "plate",
+                              "city",
+                              "state",
+                              "capacity",
+                              "compartments",
+                            ] as const
+                          ).map((field) => (
+                            <input
+                              key={field}
+                              value={
+                                approvalDriverFields[request.id]?.[field] ?? ""
+                              }
+                              onChange={(event) =>
+                                onDriverFieldChange(
+                                  request.id,
+                                  field,
+                                  event.target.value,
+                                )
+                              }
+                              placeholder={`${fieldLabel[field]}${request.company_id ? "" : " *"}`}
+                              type={
+                                field === "cnh_expires_at"
+                                  ? "date"
+                                  : field === "vehicle_year"
+                                    ? "number"
+                                    : "text"
+                              }
+                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                            />
+                          ))}
+                          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-600 sm:col-span-2">
+                            <input
+                              type="checkbox"
+                              checked={
+                                approvalDriverFields[request.id]
+                                  ?.location_sharing_authorized ?? false
+                              }
+                              onChange={(event) =>
+                                onDriverFieldChange(
+                                  request.id,
+                                  "location_sharing_authorized",
+                                  event.target.checked ? "true" : "false",
+                                )
+                              }
+                            />
+                            Autoriza compartilhamento da localização
+                          </label>
+                        </div>
+                      </>
+                    )}
+                    {(selectedRole === "operator" ||
+                      selectedRole === "admin") && (
+                      <input
+                        type="password"
+                        value={initialPasswords[request.id] ?? ""}
+                        onChange={(event) =>
+                          onInitialPasswordChange(
+                            request.id,
+                            event.target.value,
+                          )
+                        }
+                        placeholder="Senha inicial (mínimo 8 caracteres) *"
+                        className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
                     )}
                   </>
                 )}
-                {request.approval_closed && (
+                {request.approval_closed && canManageStatus && (
                   <button
                     type="button"
                     onClick={() => onReopen(request.id)}
@@ -175,9 +257,15 @@ const fieldLabel: Record<keyof ApprovalDriverFields, string> = {
   full_name: "Nome completo",
   phone: "Telefone",
   vehicle_model: "Veículo",
+  vehicle_year: "Ano do veículo",
   plate: "Placa",
   city: "Cidade",
   state: "UF",
   capacity: "Capacidade",
   compartments: "Compartimentação",
+  cpf: "CPF",
+  cnh: "CNH",
+  cnh_category: "Categoria da CNH",
+  cnh_expires_at: "Validade da CNH",
+  location_sharing_authorized: "Autorização de localização",
 };

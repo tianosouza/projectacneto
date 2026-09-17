@@ -5,12 +5,18 @@ export function ConfirmationModal({
   title,
   message,
   actionLabel = "Continuar",
+  cancelLabel,
+  onCancel,
+  destructive = false,
   onClose,
 }: {
   open: boolean;
   title: string;
   message: string;
   actionLabel?: string;
+  cancelLabel?: string;
+  onCancel?: () => void;
+  destructive?: boolean;
   onClose: () => void;
 }) {
   if (!open) return null;
@@ -24,7 +30,9 @@ export function ConfirmationModal({
         className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
       >
         <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+          <div
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${destructive ? "bg-rose-50 text-rose-600" : "bg-emerald-50 text-emerald-600"}`}
+          >
             <CheckCircle2 size={22} />
           </div>
           <div className="flex-1">
@@ -47,13 +55,24 @@ export function ConfirmationModal({
             <X size={18} />
           </button>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="mt-5 w-full rounded-xl bg-[#1052c7] px-4 py-3 text-sm font-semibold text-white hover:bg-[#0b3f9f]"
-        >
-          {actionLabel}
-        </button>
+        <div className="mt-5 flex gap-2">
+          {cancelLabel && (
+            <button
+              type="button"
+              onClick={onCancel ?? onClose}
+              className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              {cancelLabel}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className={`flex-1 rounded-xl px-4 py-3 text-sm font-semibold text-white ${destructive ? "bg-rose-600 hover:bg-rose-700" : "bg-[#1052c7] hover:bg-[#0b3f9f]"}`}
+          >
+            {actionLabel}
+          </button>
+        </div>
       </div>
     </div>
   );

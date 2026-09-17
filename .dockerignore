@@ -8,6 +8,9 @@
 **/lerna-debug.log*
 
 **/node_modules
+mobile
+mobile/**
+backend/node_modules
 **/dist
 **/dist-ssr
 **/*.local

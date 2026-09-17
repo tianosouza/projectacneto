@@ -1,4 +1,4 @@
-import { Pencil, Search, Trash2, Users } from "lucide-react";
+import { MessageCircle, Pencil, Search, Trash2, Users } from "lucide-react";
 import type { DemoContact, DemoDriver } from "@/lib/dashboardTypes";
 
 export function MetricCard({
@@ -38,12 +38,14 @@ export function MetricCard({
 export function DirectoryRow({
   title,
   detail,
+  phone,
   badge,
   onEdit,
   onDelete,
 }: {
   title: string;
   detail: string;
+  phone?: string | null;
   badge?: string;
   onEdit: () => void;
   onDelete?: () => void;
@@ -59,6 +61,18 @@ export function DirectoryRow({
           <span className="hidden text-[10px] font-semibold uppercase text-slate-400 sm:block">
             {badge}
           </span>
+        )}
+        {phone && (
+          <a
+            href={`https://wa.me/${phone.replace(/\D/g, "").replace(/^([^5]|5[^5])/, "55$1")}`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-lg p-2 text-emerald-600 transition hover:bg-emerald-50 hover:text-emerald-700"
+            aria-label={`Conversar com ${title} pelo WhatsApp`}
+            title="WhatsApp"
+          >
+            <MessageCircle size={15} />
+          </a>
         )}
         <button
           type="button"
@@ -145,7 +159,8 @@ export function DirectoryPanel({
               <DirectoryRow
                 key={driver.id}
                 title={driver.full_name}
-                detail={`${driver.vehicle_model ?? "Veículo não informado"} · ${driver.city ?? "GPS atual"}`}
+                detail={`${driver.current_vehicle ? `${driver.current_vehicle.plate} · ${driver.current_vehicle.type}` : (driver.vehicle_model ?? "Veículo não vinculado")} · ${driver.carrier?.name ?? "Autônomo"} · ${driver.city ?? "GPS atual"}`}
+                badge={driver.homologation_status ?? "Em análise"}
                 onEdit={() => onEditDriver(driver)}
                 onDelete={canDelete ? () => onDeleteDriver(driver) : undefined}
               />
@@ -155,6 +170,7 @@ export function DirectoryPanel({
                 key={item.id}
                 title={item.name}
                 detail={`${item.email} · ${item.region || "Região não informada"}`}
+                phone={item.phone}
                 badge={item.accessLevel}
                 onEdit={() => onEditContact(item)}
                 onDelete={canDelete ? () => onDeleteContact(item) : undefined}
