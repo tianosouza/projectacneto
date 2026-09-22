@@ -14,6 +14,7 @@ import {
   Truck,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { apiFetch } from "@/lib/api";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -38,7 +39,12 @@ export function AuthScreen() {
     city: "",
     state: "",
     locationSharingAuthorized: false,
+    employmentType: "autonomous" as "autonomous" | "carrier",
+    carrierId: "",
   });
+  const [transportCompanies, setTransportCompanies] = useState<
+    Array<{ id: string; name: string; cnpj: string }>
+  >([]);
   const [resetToken, setResetToken] = useState("");
   const [resetPasswordValue, setResetPasswordValue] = useState("");
   const [registrationNotes, setRegistrationNotes] = useState("");
@@ -67,6 +73,17 @@ export function AuthScreen() {
       document.documentElement.style.overflow = previousHtmlOverflow;
     };
   }, [signupOpen]);
+
+  useEffect(() => {
+    if (!signupOpen || requestedRole !== "driver") return;
+    void apiFetch("/api/transport-companies")
+      .then(
+        (response) =>
+          response.json() as Promise<{ companies?: typeof transportCompanies }>,
+      )
+      .then((body) => setTransportCompanies(body.companies ?? []))
+      .catch(() => setTransportCompanies([]));
+  }, [signupOpen, requestedRole]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -509,6 +526,55 @@ export function AuthScreen() {
                     />
                   </div>
                   <div className="rounded-xl border border-dashed border-blue-200 bg-white/70 p-3">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <label className="flex flex-col gap-1 text-xs font-semibold text-blue-900">
+                        Vínculo profissional *
+                        <select
+                          value={driver.employmentType}
+                          onChange={(event) =>
+                            setDriver((current) => ({
+                              ...current,
+                              employmentType: event.target.value as
+                                | "autonomous"
+                                | "carrier",
+                              carrierId:
+                                event.target.value === "autonomous"
+                                  ? ""
+                                  : current.carrierId,
+                            }))
+                          }
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        >
+                          <option value="autonomous">Autônomo</option>
+                          <option value="carrier">
+                            Motorista de transportadora
+                          </option>
+                        </select>
+                      </label>
+                      {driver.employmentType === "carrier" && (
+                        <label className="flex flex-col gap-1 text-xs font-semibold text-blue-900">
+                          Transportadora *
+                          <select
+                            value={driver.carrierId}
+                            onChange={(event) =>
+                              setDriver((current) => ({
+                                ...current,
+                                carrierId: event.target.value,
+                              }))
+                            }
+                            required
+                            className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                          >
+                            <option value="">Selecione a transportadora</option>
+                            {transportCompanies.map((company) => (
+                              <option key={company.id} value={company.id}>
+                                {company.name} · {company.cnpj}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                    </div>
                     <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-blue-800">
                       <Truck size={15} /> Veículo próprio (obrigatório)
                     </p>

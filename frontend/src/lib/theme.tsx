@@ -1,7 +1,7 @@
 import {
   createContext,
   useContext,
-  useEffect,
+  useLayoutEffect,
   useState,
   type ReactNode,
 } from "react";
@@ -21,7 +21,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return localStorage.getItem("acneto-theme") === "dark" ? "dark" : "light";
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.style.colorScheme = theme;
     localStorage.setItem("acneto-theme", theme);

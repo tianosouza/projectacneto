@@ -16,6 +16,8 @@ export type DemoContact = {
   address?: string | null;
   city?: string | null;
   state?: string | null;
+  financeEnabled?: boolean;
+  negotiationsEnabled?: boolean;
 };
 
 export type PendingUser = {
@@ -28,6 +30,15 @@ export type PendingUser = {
   registration_notes: string | null;
   approval_closed?: boolean;
   company_id?: string | null;
+  company?: {
+    legal_name: string;
+    cnpj: string;
+    state_registration: string | null;
+    phone: string;
+    address: string;
+    email: string;
+    status: string;
+  } | null;
   driver?: ApprovalDriverFields | null;
   created_at: string;
 };
@@ -47,6 +58,13 @@ export type ApprovalDriverFields = {
   cnh_category: string;
   cnh_expires_at: string;
   location_sharing_authorized: boolean;
+  employment_type?: "autonomous" | "carrier" | string;
+  carrier?: {
+    id: string;
+    name?: string;
+    legal_name?: string;
+    cnpj: string;
+  } | null;
 };
 
 export type DemoDriver = {
@@ -102,6 +120,8 @@ export type DemoDriver = {
     cnpj: string | null;
     status: string;
   } | null;
+  employment_type?: "autonomous" | "carrier" | string;
+  carrier_id?: string;
 };
 
 export type DirectoryOperator = {
@@ -110,6 +130,8 @@ export type DirectoryOperator = {
   email: string;
   phone: string | null;
   role: string;
+  finance_enabled?: boolean;
+  negotiations_enabled?: boolean;
 };
 
 export type RouteSummary = {

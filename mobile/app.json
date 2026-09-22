@@ -2,7 +2,7 @@
   "expo": {
     "name": "Next Driver para Motoristas",
     "slug": "next-driver-motoristas",
-    "version": "1.0.1-beta",
+    "version": "1.0-beta",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "acneto",
@@ -41,7 +41,8 @@
           "isAndroidBackgroundLocationEnabled": true,
           "locationAlwaysAndWhenInUsePermission": "Permita que o Next Driver acompanhe sua posição enquanto você estiver online."
         }
-      ]
+      ],
+      "expo-sharing"
     ]
   }
 }

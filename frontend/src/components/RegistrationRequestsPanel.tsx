@@ -1,4 +1,5 @@
 import type { ApprovalDriverFields, PendingUser } from "@/lib/dashboardTypes";
+import { Loader2 } from "lucide-react";
 
 export function RegistrationRequestsPanel({
   requests,
@@ -12,6 +13,7 @@ export function RegistrationRequestsPanel({
   onDriverFieldChange,
   onApprove,
   onReject,
+  processingRequest,
   onClose,
   onReopen,
 }: {
@@ -33,6 +35,10 @@ export function RegistrationRequestsPanel({
   ) => void;
   onApprove: (request: PendingUser) => void;
   onReject: (request: PendingUser) => void;
+  processingRequest: {
+    id: string;
+    action: "approve" | "reject";
+  } | null;
   onClose: (userId: string) => void;
   onReopen: (userId: string) => void;
 }) {
@@ -60,6 +66,12 @@ export function RegistrationRequestsPanel({
           {requests.map((request) => {
             const selectedRole =
               approvalRoles[request.id] ?? request.requested_role;
+            const isApproving =
+              processingRequest?.id === request.id &&
+              processingRequest.action === "approve";
+            const isRejecting =
+              processingRequest?.id === request.id &&
+              processingRequest.action === "reject";
             return (
               <div
                 key={request.id}
@@ -95,6 +107,55 @@ export function RegistrationRequestsPanel({
                     {request.approval_closed ? "Fechada" : "Em análise"}
                   </span>
                 </div>
+                {selectedRole === "carrier" && (
+                  <div className="grid gap-2 rounded-xl border border-blue-100 bg-blue-50/60 p-3 sm:grid-cols-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-blue-900 sm:col-span-2">
+                      Dados da transportadora para conferência
+                    </p>
+                    <ReadOnlyField
+                      label="Sócio representante"
+                      value={request.full_name ?? "Não informado"}
+                    />
+                    <ReadOnlyField
+                      label="E-mail da conta"
+                      value={request.email}
+                    />
+                    <ReadOnlyField
+                      label="Telefone / WhatsApp"
+                      value={
+                        request.company?.phone ??
+                        request.phone ??
+                        "Não informado"
+                      }
+                    />
+                    <ReadOnlyField
+                      label="Razão social"
+                      value={request.company?.legal_name ?? "Não informado"}
+                    />
+                    <ReadOnlyField
+                      label="CNPJ"
+                      value={request.company?.cnpj ?? "Não informado"}
+                    />
+                    <ReadOnlyField
+                      label="Inscrição estadual"
+                      value={
+                        request.company?.state_registration ?? "Não informada"
+                      }
+                    />
+                    <ReadOnlyField
+                      label="Endereço"
+                      value={request.company?.address ?? "Não informado"}
+                    />
+                    <ReadOnlyField
+                      label="Situação"
+                      value={
+                        request.company?.status === "in_analysis"
+                          ? "Em análise"
+                          : (request.company?.status ?? "Não informado")
+                      }
+                    />
+                  </div>
+                )}
                 {!request.approval_closed && (
                   <>
                     <div className="flex flex-col gap-2 sm:flex-row">
@@ -124,18 +185,26 @@ export function RegistrationRequestsPanel({
                         <button
                           type="button"
                           onClick={() => onApprove(request)}
-                          className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+                          disabled={Boolean(processingRequest)}
+                          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60"
                         >
-                          Aprovar cadastro
+                          {isApproving && (
+                            <Loader2 size={14} className="animate-spin" />
+                          )}
+                          {isApproving ? "Aprovando..." : "Aprovar cadastro"}
                         </button>
                       )}
                       {canManageStatus && (
                         <button
                           type="button"
                           onClick={() => onReject(request)}
-                          className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                          disabled={Boolean(processingRequest)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-wait disabled:opacity-60"
                         >
-                          Rejeitar cadastro
+                          {isRejecting && (
+                            <Loader2 size={14} className="animate-spin" />
+                          )}
+                          {isRejecting ? "Rejeitando..." : "Rejeitar cadastro"}
                         </button>
                       )}
                       {canManageStatus && (
@@ -158,6 +227,15 @@ export function RegistrationRequestsPanel({
                           </div>
                         )}
                         <div className="grid gap-2 sm:grid-cols-2">
+                          <ReadOnlyField
+                            label="Vínculo profissional"
+                            value={
+                              approvalDriverFields[request.id] &&
+                              request.driver?.employment_type === "carrier"
+                                ? `Motorista de transportadora${request.driver.carrier?.name ? `: ${request.driver.carrier.name}` : ""}`
+                                : "Autônomo"
+                            }
+                          />
                           {(
                             [
                               "full_name",
@@ -268,4 +346,19 @@ const fieldLabel: Record<keyof ApprovalDriverFields, string> = {
   cnh_category: "Categoria da CNH",
   cnh_expires_at: "Validade da CNH",
   location_sharing_authorized: "Autorização de localização",
+  employment_type: "Vínculo profissional",
+  carrier: "Transportadora",
 };
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-blue-100 bg-white px-3 py-2">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <p className="mt-0.5 break-words text-xs font-medium text-slate-700">
+        {value}
+      </p>
+    </div>
+  );
+}

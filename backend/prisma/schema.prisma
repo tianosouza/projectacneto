@@ -21,6 +21,10 @@ model User {
   transportCompany TransportCompany? @relation("CompanyAccount")
   changeRequests AccountChangeRequest[]
   passwordResetTokens PasswordResetToken[]
+  createdNegotiations FreightNegotiation[] @relation("NegotiationCreator")
+  negotiationOffers FreightNegotiationOffer[]
+  negotiationMessages FreightNegotiationMessage[]
+  reviewedWalletEntries DriverWalletEntry[] @relation("WalletReview")
 }
 
 model Profile {
@@ -34,6 +38,9 @@ model Profile {
   approved  Boolean  @default(false)
   approvalClosed Boolean @default(false)
   mustChangePassword Boolean @default(false)
+  financeEnabled Boolean @default(false)
+  negotiationsEnabled Boolean @default(false)
+  isSuperAdmin Boolean @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -68,6 +75,7 @@ model Driver {
   lastSeen         DateTime?
   status           String    @default("offline")
   notes            String?
+  employmentType   String    @default("autonomous")
   availabilitySince DateTime?
   rating           Float     @default(0)
   totalTrips       Int       @default(0)
@@ -80,6 +88,8 @@ model Driver {
   vehicleAssignments VehicleDriverAssignment[]
   carrierLinks DriverCarrierLink[]
   documents HomologationDocument[]
+  negotiations FreightNegotiation[]
+  walletEntries DriverWalletEntry[]
 
   @@index([status])
   @@index([isOnline])
@@ -102,8 +112,73 @@ model OperationalLocation {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  collectionNegotiations FreightNegotiation[] @relation("CollectionNegotiations")
+  customerNegotiations   FreightNegotiation[] @relation("CustomerNegotiations")
+
   @@index([kind, active])
   @@index([city, state])
+}
+
+model FreightNegotiation {
+  id                String   @id @default(cuid())
+  driverId          String
+  createdByUserId   String
+  collectionPointId String
+  finalCustomerId   String
+  cargo             String?
+  product           String?
+  quantity          String?
+  cteNumber        String?
+  documentsReleased Boolean  @default(false)
+  loadingScheduledAt DateTime?
+  distanceKm        Float?
+  pricePerKm        Float?
+  initialValue      Float
+  currentValue      Float
+  status            String   @default("pending")
+  expiresAt         DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  driver          Driver             @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  createdBy       User               @relation("NegotiationCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  collectionPoint OperationalLocation @relation("CollectionNegotiations", fields: [collectionPointId], references: [id], onDelete: Restrict)
+  finalCustomer   OperationalLocation @relation("CustomerNegotiations", fields: [finalCustomerId], references: [id], onDelete: Restrict)
+  offers          FreightNegotiationOffer[]
+  messages        FreightNegotiationMessage[]
+  walletEntry     DriverWalletEntry?
+
+  @@index([driverId, status])
+  @@index([createdByUserId, status])
+  @@index([status, updatedAt])
+}
+
+model FreightNegotiationOffer {
+  id            String   @id @default(cuid())
+  negotiationId String
+  userId        String
+  amount        Float
+  message       String?
+  status        String   @default("pending")
+  createdAt     DateTime @default(now())
+
+  negotiation FreightNegotiation @relation(fields: [negotiationId], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([negotiationId, createdAt])
+}
+
+model FreightNegotiationMessage {
+  id            String   @id @default(cuid())
+  negotiationId String
+  userId        String
+  body          String
+  createdAt     DateTime @default(now())
+
+  negotiation FreightNegotiation @relation(fields: [negotiationId], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([negotiationId, createdAt])
 }
 
 model AccountChangeRequest {
@@ -149,6 +224,7 @@ model TransportCompany {
   profiles Profile[]
   vehicles Vehicle[] @relation("CompanyVehicles")
   driverLinks DriverCarrierLink[]
+  walletEntries DriverWalletEntry[]
   documents HomologationDocument[]
 
   @@index([status])
@@ -239,4 +315,30 @@ model HomologationDocument {
   @@index([driverId, status])
   @@index([vehicleId, status])
   @@index([companyId, status])
+}
+
+model DriverWalletEntry {
+  id             String   @id @default(cuid())
+  driverId       String
+  negotiationId  String   @unique
+  companyId      String?
+  amount         Float
+  status         String   @default("pending_review")
+  paymentNote    String?
+  paymentProofName String?
+  paymentProofData String?
+  reviewedById   String?
+  reviewedAt     DateTime?
+  paidAt         DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  driver       Driver           @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  negotiation  FreightNegotiation @relation(fields: [negotiationId], references: [id], onDelete: Cascade)
+  company      TransportCompany? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  reviewedBy   User?             @relation("WalletReview", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([driverId, status])
+  @@index([companyId, status])
+  @@index([createdAt])
 }

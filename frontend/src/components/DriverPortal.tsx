@@ -7,7 +7,6 @@ import {
   TrendingUp,
   Clock,
   Zap,
-  LogOut,
   User,
   Phone,
   Mail,
@@ -20,15 +19,17 @@ import {
   Edit3,
   Save,
   X,
+  LogOut,
+  Bell,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import type { Driver } from "@/lib/types";
 import { AccountCenter } from "@/components/AccountCenter";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { AppDownloadButton } from "@/components/AppDownloadButton";
-import { apiFetch } from "@/lib/api";
+import { SettingsMenu } from "@/components/SettingsMenu";
+import { apiEventSource, apiFetch } from "@/lib/api";
 
-type Tab = "home" | "profile" | "history" | "settings";
+type Tab = "home" | "profile" | "history" | "negotiations" | "settings";
 const accessToken = () => localStorage.getItem("acneto-access-token");
 const apiHeaders = () => ({
   "Content-Type": "application/json",
@@ -86,11 +87,63 @@ export function DriverPortal() {
     "idle" | "tracking" | "denied" | "unavailable"
   >("idle");
   const [locationPromptOpen, setLocationPromptOpen] = useState(false);
+  const [pendingNegotiations, setPendingNegotiations] = useState(0);
+  const [walletPreview, setWalletPreview] = useState<{
+    total: number;
+    pending: number;
+    completed_freights: number;
+  } | null>(null);
   const lastReverseGeocode = useRef({ key: "", timestamp: 0 });
   const driverId = driver?.id;
   const locationPermissionKey = driverId
     ? `acneto-location-permission:${driverId}`
     : null;
+
+  useEffect(() => {
+    if (!driverId || !accessToken()) return;
+    let active = true;
+    const loadOffers = async () => {
+      const response = await apiFetch("/api/negotiations?status=pending", {
+        headers: apiHeaders(),
+      });
+      if (!response.ok || !active) return;
+      const body = (await response.json()) as { negotiations: unknown[] };
+      setPendingNegotiations(body.negotiations.length);
+    };
+    void loadOffers();
+    const timer = window.setInterval(() => void loadOffers(), 5000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [driverId]);
+
+  useEffect(() => {
+    const goHome = () => setTab("home");
+    window.addEventListener("acneto-driver-go-home", goHome);
+    return () => window.removeEventListener("acneto-driver-go-home", goHome);
+  }, []);
+
+  useEffect(() => {
+    if (!driverId || !accessToken()) return;
+    let active = true;
+    const loadWalletPreview = async () => {
+      const response = await apiFetch("/api/drivers/me/wallet", {
+        headers: apiHeaders(),
+      });
+      if (!response.ok || !active) return;
+      const body = (await response.json()) as {
+        summary: { total: number; pending: number; completed_freights: number };
+      };
+      setWalletPreview(body.summary);
+    };
+    void loadWalletPreview();
+    const timer = window.setInterval(() => void loadWalletPreview(), 10000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [driverId]);
 
   useEffect(() => {
     const token = accessToken();
@@ -411,6 +464,10 @@ export function DriverPortal() {
               setDriver(updated);
             }}
             toggling={toggling}
+            pendingNegotiations={pendingNegotiations}
+            onOpenNegotiations={() => setTab("negotiations")}
+            walletPreview={walletPreview}
+            onOpenWallet={() => setTab("history")}
           />
         )}
         {tab === "profile" && (
@@ -424,7 +481,8 @@ export function DriverPortal() {
             driver={driver}
           />
         )}
-        {tab === "history" && <HistoryView />}
+        {tab === "history" && <WalletView />}
+        {tab === "negotiations" && <DriverNegotiationsView />}
         {tab === "settings" && <SettingsView onSignOut={signOut} />}
       </main>
 
@@ -491,7 +549,7 @@ function TopBar({
         </div>
         <div className="flex items-center gap-3">
           <ThemeToggle />
-          <AppDownloadButton />
+          <SettingsMenu onSignOut={onSignOut} />
           <div
             className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
               driver.is_online
@@ -504,13 +562,6 @@ function TopBar({
             />
             {driver.is_online ? "Online" : "Offline"}
           </div>
-          <button
-            onClick={onSignOut}
-            className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100"
-            aria-label="Sair"
-          >
-            <LogOut size={18} />
-          </button>
         </div>
       </div>
     </header>
@@ -523,17 +574,30 @@ function HomeView({
   onToggle,
   onUpdate,
   toggling,
+  pendingNegotiations,
+  onOpenNegotiations,
+  walletPreview,
+  onOpenWallet,
 }: {
   driver: Driver;
   locationStatus: "idle" | "tracking" | "denied" | "unavailable";
   onToggle: () => void;
   onUpdate: (updates: Partial<Driver>) => void;
   toggling: boolean;
+  pendingNegotiations: number;
+  onOpenNegotiations: () => void;
+  walletPreview: {
+    total: number;
+    pending: number;
+    completed_freights: number;
+  } | null;
+  onOpenWallet: () => void;
 }) {
   const operationalStatuses: { value: Driver["status"]; label: string }[] = [
     { value: "available", label: "Disponível" },
     { value: "awaiting_loading", label: "Aguardando carregamento" },
     { value: "awaiting_documents", label: "Aguardando documentação" },
+    { value: "awaiting_loading", label: "Aguardando carregamento" },
     { value: "in_transit", label: "Em trânsito" },
     { value: "awaiting_unloading", label: "Aguardando descarga" },
   ];
@@ -577,6 +641,47 @@ function HomeView({
           {driver.is_online ? "Ficar Offline" : "Ficar Online"}
         </button>
       </div>
+
+      <button
+        type="button"
+        onClick={onOpenNegotiations}
+        className="flex w-full items-center justify-between rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4 text-left transition hover:bg-blue-100"
+      >
+        <div>
+          <p className="text-sm font-bold text-blue-900">Ofertas de frete</p>
+          <p className="mt-1 text-xs text-blue-700">
+            {pendingNegotiations > 0
+              ? "Você tem proposta aguardando resposta."
+              : "Consulte suas negociações e mensagens."}
+          </p>
+        </div>
+        <span className="rounded-full bg-blue-600 px-3 py-1 text-xs font-bold text-white">
+          {pendingNegotiations}
+        </span>
+      </button>
+
+      <button
+        type="button"
+        onClick={onOpenWallet}
+        className="flex w-full items-center justify-between rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-left transition hover:bg-emerald-100"
+      >
+        <div>
+          <p className="text-sm font-bold text-emerald-900">Minha carteira</p>
+          <p className="mt-1 text-xs text-emerald-700">
+            {walletPreview?.completed_freights ?? 0} fretes concluídos · A
+            receber: R${" "}
+            {(walletPreview?.pending ?? 0).toLocaleString("pt-BR", {
+              minimumFractionDigits: 2,
+            })}
+          </p>
+        </div>
+        <strong className="text-emerald-800">
+          R${" "}
+          {(walletPreview?.total ?? 0).toLocaleString("pt-BR", {
+            minimumFractionDigits: 2,
+          })}
+        </strong>
+      </button>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-start justify-between gap-4">
@@ -1007,66 +1112,490 @@ export function ProfileField({
   );
 }
 
-function HistoryView() {
-  const trips = [
-    {
-      route: "Ribeirão Preto → São Paulo",
-      date: "28/08/2026",
-      value: "R$ 4.200",
-      status: "Concluída",
-    },
-    {
-      route: "Campinas → Belo Horizonte",
-      date: "24/08/2026",
-      value: "R$ 3.800",
-      status: "Concluída",
-    },
-    {
-      route: "Uberlândia → Goiânia",
-      date: "20/08/2026",
-      value: "R$ 2.900",
-      status: "Concluída",
-    },
-  ];
+function WalletView() {
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
+  const [wallet, setWallet] = useState<{
+    summary: {
+      total: number;
+      pending: number;
+      paid: number;
+      completed_freights: number;
+    };
+    entries: Array<{
+      id: string;
+      amount: number;
+      status: string;
+      payment_note?: string | null;
+      payment_proof_name?: string | null;
+      payment_proof_data?: string | null;
+      company?: { name?: string; legal_name?: string } | null;
+      created_at: string;
+      negotiation?: {
+        collection_point?: { name?: string } | null;
+        final_customer?: { name?: string } | null;
+      } | null;
+    }>;
+  } | null>(null);
 
+  useEffect(() => {
+    let active = true;
+    const loadWallet = async () => {
+      const response = await apiFetch("/api/drivers/me/wallet", {
+        headers: apiHeaders(),
+      });
+      if (!response.ok || !active) return;
+      setWallet((await response.json()) as typeof wallet);
+    };
+    void loadWallet();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const money = (value: number) =>
+    `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-bold text-[#0b1d3a]">
-          Histórico de viagens
-        </h1>
+        <button
+          type="button"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent("acneto-driver-go-home"))
+          }
+          className="mb-3 text-sm font-semibold text-blue-700 hover:underline"
+        >
+          ← Voltar para início
+        </button>
+        <h1 className="text-xl font-bold text-[#0b1d3a]">Minha carteira</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Suas últimas viagens realizadas.
+          Acompanhe seus fretes concluídos e valores a receber.
         </p>
       </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <WalletMetric
+          label="Total concluído"
+          value={money(wallet?.summary.total ?? 0)}
+        />
+        <WalletMetric
+          label="A receber"
+          value={money(wallet?.summary.pending ?? 0)}
+        />
+        <WalletMetric
+          label="Fretes concluídos"
+          value={String(wallet?.summary.completed_freights ?? 0)}
+        />
+      </div>
       <div className="space-y-3">
-        {trips.map((trip, i) => (
-          <div
-            key={i}
-            className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+        {wallet?.entries.map((entry) => (
+          <button
+            type="button"
+            onClick={() =>
+              setSelectedEntryId((current) =>
+                current === entry.id ? null : entry.id,
+              )
+            }
+            key={entry.id}
+            className="w-full rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm"
           >
-            <div className="flex items-start justify-between">
+            <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
                   <Truck size={18} />
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-slate-800">
-                    {trip.route}
+                    {entry.negotiation?.collection_point?.name ?? "Origem"} →{" "}
+                    {entry.negotiation?.final_customer?.name ?? "Destino"}
                   </p>
-                  <p className="mt-0.5 text-xs text-slate-500">{trip.date}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {new Date(entry.created_at).toLocaleDateString("pt-BR")}
+                  </p>
                 </div>
               </div>
               <div className="text-right">
-                <p className="text-sm font-bold text-[#0b1d3a]">{trip.value}</p>
-                <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-600">
-                  <CheckCircle2 size={12} /> {trip.status}
+                <p className="text-sm font-bold text-[#0b1d3a]">
+                  {money(entry.amount)}
+                </p>
+                <span className="text-[10px] font-semibold text-amber-600">
+                  {entry.status === "paid"
+                    ? "Pago"
+                    : entry.status === "approved"
+                      ? "Pagamento aprovado"
+                      : entry.status === "rejected"
+                        ? "Devolvido para conferência"
+                        : "Aguardando conferência"}
                 </span>
+                {entry.company && (
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    Pagador: {entry.company.name ?? entry.company.legal_name}
+                  </p>
+                )}
               </div>
             </div>
-          </div>
+            {selectedEntryId === entry.id && (
+              <div className="mt-4 grid gap-2 border-t border-slate-100 pt-4 text-xs text-slate-600 sm:grid-cols-2">
+                <p>
+                  <strong>Valor:</strong> {money(entry.amount)}
+                </p>
+                <p>
+                  <strong>Status:</strong>{" "}
+                  {entry.status === "paid"
+                    ? "Pagamento realizado"
+                    : "Aguardando pagamento"}
+                </p>
+                <p>
+                  <strong>Empresa:</strong>{" "}
+                  {entry.company?.name ??
+                    entry.company?.legal_name ??
+                    "Autônomo"}
+                </p>
+                <p>
+                  <strong>Data:</strong>{" "}
+                  {new Date(entry.created_at).toLocaleString("pt-BR")}
+                </p>
+                {entry.status === "paid" &&
+                  entry.payment_proof_name &&
+                  entry.payment_proof_data && (
+                    <a
+                      href={entry.payment_proof_data}
+                      download={entry.payment_proof_name}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-semibold text-blue-700 sm:col-span-2"
+                    >
+                      Ver comprovante de pagamento: {entry.payment_proof_name}
+                    </a>
+                  )}
+              </div>
+            )}
+          </button>
         ))}
+        {wallet && wallet.entries.length === 0 && (
+          <p className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-500">
+            Nenhum frete concluído na carteira.
+          </p>
+        )}
+        {!wallet && (
+          <p className="text-sm text-slate-500">Carregando carteira...</p>
+        )}
       </div>
+    </div>
+  );
+}
+
+function WalletMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <p className="mt-2 text-xl font-bold text-[#0b1d3a]">{value}</p>
+    </div>
+  );
+}
+
+function DriverNegotiationsView() {
+  const goHome = () =>
+    window.dispatchEvent(new CustomEvent("acneto-driver-go-home"));
+  const [items, setItems] = useState<
+    Array<{
+      id: string;
+      collection_point?: { name?: string } | null;
+      final_customer?: { name?: string } | null;
+      product?: string | null;
+      distance_km: number | null;
+      price_per_km: number | null;
+      current_value: number;
+      status: string;
+      messages: Array<{ id: string; body: string }>;
+    }>
+  >([]);
+  const [offerValues, setOfferValues] = useState<Record<string, string>>({});
+  const [messageValues, setMessageValues] = useState<Record<string, string>>(
+    {},
+  );
+  const [error, setError] = useState("");
+  const load = async () => {
+    const response = await apiFetch("/api/negotiations", {
+      headers: apiHeaders(),
+    });
+    if (response.ok)
+      setItems(
+        ((await response.json()) as { negotiations: typeof items })
+          .negotiations,
+      );
+    else setError("Não foi possível carregar suas ofertas.");
+  };
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => void load(), 5000);
+    const token = accessToken();
+    const events = token
+      ? apiEventSource(`/api/events?token=${encodeURIComponent(token)}`)
+      : null;
+    const refreshOnEvent = () => void load();
+    events?.addEventListener("message", refreshOnEvent);
+    return () => {
+      window.clearInterval(timer);
+      events?.removeEventListener("message", refreshOnEvent);
+      events?.close();
+    };
+  }, []);
+  const action = async (id: string, name: "accept" | "reject") => {
+    const response = await apiFetch(`/api/negotiations/${id}/${name}`, {
+      method: "POST",
+      headers: apiHeaders(),
+    });
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string };
+      setError(body.error ?? "Não foi possível atualizar a oferta.");
+      return;
+    }
+    await load();
+  };
+  const sendOffer = async (id: string) => {
+    const response = await apiFetch(`/api/negotiations/${id}/offer`, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify({ amount: Number(offerValues[id]) }),
+    });
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string };
+      setError(body.error ?? "Não foi possível enviar a contraproposta.");
+      return;
+    }
+    setOfferValues((current) => ({ ...current, [id]: "" }));
+    await load();
+  };
+  const sendMessage = async (id: string) => {
+    const body = messageValues[id]?.trim();
+    if (!body) return;
+    const response = await apiFetch(`/api/negotiations/${id}/messages`, {
+      method: "POST",
+      headers: apiHeaders(),
+      body: JSON.stringify({ body }),
+    });
+    if (!response.ok) {
+      const result = (await response.json()) as { error?: string };
+      setError(result.error ?? "Não foi possível enviar a mensagem.");
+      return;
+    }
+    setMessageValues((current) => ({ ...current, [id]: "" }));
+    await load();
+  };
+  const freightStep = async (
+    id: string,
+    step: "start" | "depart" | "arrive" | "finish",
+  ) => {
+    const response = await apiFetch(`/api/negotiations/${id}/freight/${step}`, {
+      method: "POST",
+      headers: apiHeaders(),
+    });
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string };
+      setError(body.error ?? "Não foi possível atualizar o frete.");
+      return;
+    }
+    await load();
+  };
+  return (
+    <div className="space-y-6">
+      <div>
+        <button
+          type="button"
+          onClick={goHome}
+          className="mb-3 text-sm font-semibold text-blue-700 hover:underline"
+        >
+          ← Voltar para início
+        </button>
+        <h1 className="text-xl font-bold text-[#0b1d3a]">Ofertas de frete</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Aceite propostas ou envie uma contraproposta para a operação.
+        </p>
+      </div>
+      {error && (
+        <p className="rounded-xl bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+          {error}
+        </p>
+      )}
+      {items.map((item) => {
+        const open = item.status === "pending" || item.status === "countered";
+        const conversationOpen = [
+          "pending",
+          "countered",
+          "accepted",
+          "in_transit",
+          "at_collection",
+          "driver_completed",
+        ].includes(item.status);
+        return (
+          <div
+            key={item.id}
+            className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-semibold text-slate-800">
+                  {item.collection_point?.name ?? "Origem"} →{" "}
+                  {item.final_customer?.name ?? "Destino"}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {item.distance_km?.toFixed(2) ?? "--"} km · R${" "}
+                  {item.price_per_km?.toFixed(2) ?? "--"}/km
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Produto: {item.product ?? "Não informado"}
+                </p>
+              </div>
+              <strong className="text-[#0b1d3a]">
+                R$ {item.current_value.toFixed(2)}
+              </strong>
+            </div>
+            <p className="mt-2 text-xs font-semibold text-blue-700">
+              {item.status === "pending"
+                ? "Nova oferta"
+                : item.status === "countered"
+                  ? "Contraproposta enviada"
+                  : item.status === "awaiting_loading"
+                    ? "Aguardando carregamento"
+                    : item.status === "in_transit"
+                      ? "Frete iniciado"
+                      : item.status === "at_collection"
+                        ? "Chegou ao posto de coleta"
+                        : item.status === "completed"
+                          ? "Frete finalizado"
+                          : item.status === "driver_completed"
+                            ? "Aguardando conferência da operação"
+                            : item.status}
+            </p>
+            {item.messages.map((message) => (
+              <p
+                key={message.id}
+                className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700"
+              >
+                {message.body}
+              </p>
+            ))}
+            {open && (
+              <>
+                <div className="mt-4 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void action(item.id, "accept")}
+                    className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white"
+                  >
+                    Aceitar oferta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void action(item.id, "reject")}
+                    className="flex-1 rounded-xl border border-rose-200 px-3 py-2 text-sm font-bold text-rose-700"
+                  >
+                    Recusar
+                  </button>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    placeholder="Valor da contraproposta"
+                    value={offerValues[item.id] ?? ""}
+                    onChange={(event) =>
+                      setOfferValues((current) => ({
+                        ...current,
+                        [item.id]: event.target.value,
+                      }))
+                    }
+                    className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void sendOffer(item.id)}
+                    className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white"
+                  >
+                    Enviar
+                  </button>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    placeholder="Mensagem para a operação"
+                    value={messageValues[item.id] ?? ""}
+                    onChange={(event) =>
+                      setMessageValues((current) => ({
+                        ...current,
+                        [item.id]: event.target.value,
+                      }))
+                    }
+                    className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void sendMessage(item.id)}
+                    className="rounded-xl bg-slate-800 px-3 py-2 text-sm font-bold text-white"
+                  >
+                    Enviar
+                  </button>
+                </div>
+              </>
+            )}
+            {conversationOpen && !open && (
+              <div className="mt-3 flex gap-2">
+                <input
+                  placeholder="Mensagem para a operação"
+                  value={messageValues[item.id] ?? ""}
+                  onChange={(event) =>
+                    setMessageValues((current) => ({
+                      ...current,
+                      [item.id]: event.target.value,
+                    }))
+                  }
+                  className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => void sendMessage(item.id)}
+                  className="rounded-xl bg-slate-800 px-3 py-2 text-sm font-bold text-white"
+                >
+                  Enviar
+                </button>
+              </div>
+            )}
+            {item.status === "accepted" && (
+              <button
+                type="button"
+                onClick={() => void freightStep(item.id, "start")}
+                className="mt-3 w-full rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white"
+              >
+                Preparar carregamento
+              </button>
+            )}
+            {item.status === "awaiting_loading" && (
+              <button
+                type="button"
+                onClick={() => void freightStep(item.id, "depart")}
+                className="mt-3 w-full rounded-xl bg-amber-600 px-3 py-2 text-sm font-bold text-white"
+              >
+                Carregamento realizado e iniciar viagem
+              </button>
+            )}
+            {item.status === "in_transit" && (
+              <button
+                type="button"
+                onClick={() => void freightStep(item.id, "finish")}
+                className="mt-3 w-full rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white"
+              >
+                Finalizar viagem e enviar para conferência
+              </button>
+            )}
+          </div>
+        );
+      })}
+      {!items.length && (
+        <p className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-500">
+          Nenhuma oferta recebida.
+        </p>
+      )}
     </div>
   );
 }
@@ -1137,7 +1666,8 @@ function BottomNav({ tab, setTab }: { tab: Tab; setTab: (tab: Tab) => void }) {
   const items: { key: Tab; label: string; icon: typeof Truck }[] = [
     { key: "home", label: "Início", icon: Zap },
     { key: "profile", label: "Perfil", icon: User },
-    { key: "history", label: "Viagens", icon: TrendingUp },
+    { key: "history", label: "Carteira", icon: TrendingUp },
+    { key: "negotiations", label: "Ofertas", icon: Bell },
     { key: "settings", label: "Ajustes", icon: Settings },
   ];
   return (

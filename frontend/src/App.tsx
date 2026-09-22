@@ -14,7 +14,6 @@ import {
   Loader2,
   Briefcase,
   Truck,
-  LogOut,
   UserPlus,
   Users,
   MapPin,
@@ -31,6 +30,7 @@ import {
   Building2,
   FileCheck2,
   Link2,
+  Shield,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import type {
@@ -56,7 +56,9 @@ import { DirectoryPanel, MetricCard } from "@/components/DashboardPrimitives";
 import { DirectorySearch as ReusableDirectorySearch } from "@/components/DirectorySearch";
 import { RegistrationRequestsPanel as ReusableRegistrationRequestsPanel } from "@/components/RegistrationRequestsPanel";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
-import { AppDownloadButton } from "@/components/AppDownloadButton";
+import { SettingsMenu } from "@/components/SettingsMenu";
+import { NegotiationsPanel } from "@/components/NegotiationsPanel";
+import { FinancePanel } from "@/components/FinancePanel";
 import { apiEventSource, apiFetch } from "@/lib/api";
 
 function App() {
@@ -90,6 +92,9 @@ function App() {
         subtitle="Painel de operação"
         accountUser={user}
         accountProfile={profile}
+        financeEnabled={profile?.finance_enabled === true}
+        negotiationsEnabled={profile?.negotiations_enabled === true}
+        isSuperAdmin={profile?.is_super_admin === true}
         onSignOut={signOut}
       />
     );
@@ -103,6 +108,9 @@ function App() {
         subtitle="Painel administrativo"
         accountUser={user}
         accountProfile={profile}
+        financeEnabled={profile?.finance_enabled === true}
+        negotiationsEnabled={profile?.negotiations_enabled === true}
+        isSuperAdmin={profile?.is_super_admin === true}
         onSignOut={signOut}
       />
     );
@@ -253,13 +261,7 @@ function CarrierDashboard({
             {accountUser.email} · {accountProfile?.role}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void onSignOut()}
-          className="rounded-lg border border-white/20 px-3 py-2 text-sm font-semibold hover:bg-white/10"
-        >
-          Sair
-        </button>
+        <SettingsMenu onSignOut={onSignOut} />
       </header>
       <main className="mx-auto mt-6 max-w-6xl space-y-6">
         <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
@@ -319,8 +321,6 @@ function CarrierDashboard({
             >
               Enviar para aprovação <ArrowRight size={15} />
             </button>
-          </RegistrationCard>
-          <RegistrationCard title="Solicitar veículo" icon={Truck}>
             <input
               value={vehicleForm.type}
               onChange={(e) =>
@@ -452,6 +452,9 @@ function RoleDashboard({
   subtitle,
   accountUser,
   accountProfile,
+  financeEnabled,
+  negotiationsEnabled,
+  isSuperAdmin,
   onSignOut,
 }: {
   role: "operator" | "admin";
@@ -463,6 +466,9 @@ function RoleDashboard({
     user_metadata: { full_name?: string };
   };
   accountProfile: { role: string; created_at: string } | null;
+  financeEnabled: boolean;
+  negotiationsEnabled: boolean;
+  isSuperAdmin: boolean;
   onSignOut: () => Promise<void>;
 }) {
   const [clients, setClients] = useState<DemoContact[]>(() =>
@@ -488,6 +494,12 @@ function RoleDashboard({
     "drivers" | "vehicles" | "companies" | "operators" | "admins" | "clients"
   >(role === "admin" ? "admins" : "drivers");
   const [initialAccessPassword, setInitialAccessPassword] = useState("");
+  const [financeEnabledForNewOperator, setFinanceEnabledForNewOperator] =
+    useState(false);
+  const [
+    negotiationsEnabledForNewOperator,
+    setNegotiationsEnabledForNewOperator,
+  ] = useState(false);
   const [drivers, setDrivers] = useState<DemoDriver[]>(() =>
     getOnlineDrivers(),
   );
@@ -495,6 +507,17 @@ function RoleDashboard({
     DirectoryOperator[]
   >([]);
   const [directoryDrivers, setDirectoryDrivers] = useState<DemoDriver[]>([]);
+  const [activeNegotiations, setActiveNegotiations] = useState(0);
+  const [moduleUsers, setModuleUsers] = useState<
+    Array<{
+      id: string;
+      name: string;
+      email: string;
+      role: string;
+      finance_enabled: boolean;
+      negotiations_enabled: boolean;
+    }>
+  >([]);
   const [driverForm, setDriverForm] = useState({
     full_name: "",
     email: "",
@@ -511,6 +534,8 @@ function RoleDashboard({
     cnh_category: "",
     cnh_expires_at: "",
     location_sharing_authorized: false,
+    employment_type: "autonomous" as "autonomous" | "carrier",
+    carrier_id: "",
   });
   const [registeredCompanies, setRegisteredCompanies] = useState(() =>
     loadList<{ id: string; name: string; cnpj: string; status: string }>(
@@ -542,7 +567,14 @@ function RoleDashboard({
     driverId: "",
   });
   const [tab, setTab] = useState<
-    "resumo" | "cadastros" | "localizacao" | "conta" | "solicitacoes"
+    | "resumo"
+    | "cadastros"
+    | "localizacao"
+    | "negociacoes"
+    | "financeiro"
+    | "modulos"
+    | "conta"
+    | "solicitacoes"
   >("resumo");
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [selectedClientIds, setSelectedClientIds] = useState<string[]>([]);
@@ -593,12 +625,151 @@ function RoleDashboard({
   const [pendingRejection, setPendingRejection] = useState<PendingUser | null>(
     null,
   );
+  const [processingRequest, setProcessingRequest] = useState<{
+    id: string;
+    action: "approve" | "reject";
+  } | null>(null);
 
   const showFormError = (message: string) => setFormError(message);
+
+  const toggleOperatorFinance = async (operator: DemoContact) => {
+    if (role !== "admin") return;
+    const response = await apiFetch(`/api/admin/users/${operator.id}/finance`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
+      },
+      body: JSON.stringify({ financeEnabled: !operator.financeEnabled }),
+    });
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string };
+      showFormError(
+        body.error ?? "Não foi possível atualizar a permissão financeira.",
+      );
+      return;
+    }
+    setOperators((current) =>
+      current.map((item) =>
+        item.id === operator.id
+          ? { ...item, financeEnabled: !operator.financeEnabled }
+          : item,
+      ),
+    );
+  };
+
+  const toggleOperatorModule = async (
+    operator: DemoContact,
+    module: "finance" | "negotiations",
+  ) => {
+    if (role !== "admin") return;
+    const enabled =
+      module === "finance"
+        ? operator.financeEnabled
+        : operator.negotiationsEnabled;
+    const response = await apiFetch(`/api/admin/users/${operator.id}/module`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
+      },
+      body: JSON.stringify({ module, enabled: !enabled }),
+    });
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string };
+      showFormError(body.error ?? "Não foi possível atualizar o módulo.");
+      return;
+    }
+    setOperators((current) =>
+      current.map((item) =>
+        item.id === operator.id
+          ? {
+              ...item,
+              ...(module === "finance"
+                ? { financeEnabled: !enabled }
+                : { negotiationsEnabled: !enabled }),
+            }
+          : item,
+      ),
+    );
+  };
 
   useEffect(() => {
     saveList("acneto-clients", clients);
   }, [clients]);
+
+  useEffect(() => {
+    if (tab === "negociacoes" && !(isSuperAdmin || negotiationsEnabled)) {
+      setTab("resumo");
+    }
+    if (tab === "financeiro" && !(isSuperAdmin || financeEnabled)) {
+      setTab("resumo");
+    }
+  }, [financeEnabled, isSuperAdmin, negotiationsEnabled, role, tab]);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    const loadModuleUsers = async () => {
+      const response = await apiFetch("/api/admin/module-users", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
+        },
+      });
+      if (response.ok)
+        setModuleUsers(
+          ((await response.json()) as { users: typeof moduleUsers }).users,
+        );
+    };
+    void loadModuleUsers();
+  }, [isSuperAdmin]);
+
+  const toggleModuleUser = async (
+    userId: string,
+    module: "finance" | "negotiations",
+    enabled: boolean,
+  ) => {
+    const response = await apiFetch(`/api/admin/users/${userId}/module`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
+      },
+      body: JSON.stringify({ module, enabled: !enabled }),
+    });
+    if (!response.ok) return;
+    setModuleUsers((current) =>
+      current.map((user) =>
+        user.id === userId
+          ? {
+              ...user,
+              ...(module === "finance"
+                ? { finance_enabled: !enabled }
+                : { negotiations_enabled: !enabled }),
+            }
+          : user,
+      ),
+    );
+  };
+
+  useEffect(() => {
+    const loadNegotiationCount = async () => {
+      const token = localStorage.getItem("acneto-access-token");
+      if (!token) return;
+      const response = await apiFetch("/api/negotiations", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) return;
+      const body = (await response.json()) as {
+        negotiations: Array<{ status: string }>;
+      };
+      setActiveNegotiations(
+        body.negotiations.filter((item) => item.status !== "completed").length,
+      );
+    };
+    void loadNegotiationCount();
+    const timer = window.setInterval(() => void loadNegotiationCount(), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     saveList("acneto-operators", operators);
@@ -630,6 +801,23 @@ function RoleDashboard({
               drivers: DemoDriver[];
               all_drivers: DemoDriver[];
               operators: DirectoryOperator[];
+              companies?: Array<{
+                id: string;
+                name: string;
+                cnpj: string;
+                status: string;
+              }>;
+              vehicles?: Array<{
+                id: string;
+                type: string;
+                plate: string;
+                capacity: string;
+                compartments: string;
+                products: string;
+                companyId: string;
+                driverId: string;
+                status: string;
+              }>;
               locations: Array<{
                 id: string;
                 kind: "collection_point" | "final_customer";
@@ -649,11 +837,40 @@ function RoleDashboard({
             drivers: apiDrivers,
             all_drivers: apiAllDrivers,
             operators: apiOperators,
+            companies = [],
+            vehicles = [],
             locations = [],
           }) => {
             setDrivers(apiDrivers);
             setDirectoryDrivers(apiAllDrivers);
             setDirectoryOperators(apiOperators);
+            setRegisteredCompanies((current) => {
+              const localOnly = current.filter(
+                (item) => !companies.some((company) => company.id === item.id),
+              );
+              return [...companies, ...localOnly];
+            });
+            setRegisteredVehicles((current) => {
+              const localOnly = current.filter(
+                (item) => !vehicles.some((vehicle) => vehicle.id === item.id),
+              );
+              return [...vehicles, ...localOnly];
+            });
+            setOperators(
+              apiOperators.map((operator) => ({
+                id: operator.id,
+                name: operator.full_name ?? "Usuário sem nome",
+                email: operator.email,
+                phone: operator.phone,
+                region: "",
+                accessLevel: "operador" as const,
+                financeEnabled: operator.finance_enabled === true,
+                negotiationsEnabled: operator.negotiations_enabled === true,
+                status: "ativo" as const,
+                latitude: null,
+                longitude: null,
+              })),
+            );
             setClients((current) => {
               if (!locations.length) return current;
               return locations.map((location) => ({
@@ -691,6 +908,23 @@ function RoleDashboard({
                 drivers: DemoDriver[];
                 all_drivers: DemoDriver[];
                 operators: DirectoryOperator[];
+                companies?: Array<{
+                  id: string;
+                  name: string;
+                  cnpj: string;
+                  status: string;
+                }>;
+                vehicles?: Array<{
+                  id: string;
+                  type: string;
+                  plate: string;
+                  capacity: string;
+                  compartments: string;
+                  products: string;
+                  companyId: string;
+                  driverId: string;
+                  status: string;
+                }>;
                 locations: Array<{
                   id: string;
                   kind: "collection_point" | "final_customer";
@@ -710,11 +944,41 @@ function RoleDashboard({
               drivers: apiDrivers,
               all_drivers: apiAllDrivers,
               operators: apiOperators,
+              companies = [],
+              vehicles = [],
               locations = [],
             }) => {
               setDrivers(apiDrivers);
               setDirectoryDrivers(apiAllDrivers);
               setDirectoryOperators(apiOperators);
+              setRegisteredCompanies((current) => {
+                const localOnly = current.filter(
+                  (item) =>
+                    !companies.some((company) => company.id === item.id),
+                );
+                return [...companies, ...localOnly];
+              });
+              setRegisteredVehicles((current) => {
+                const localOnly = current.filter(
+                  (item) => !vehicles.some((vehicle) => vehicle.id === item.id),
+                );
+                return [...vehicles, ...localOnly];
+              });
+              setOperators(
+                apiOperators.map((operator) => ({
+                  id: operator.id,
+                  name: operator.full_name ?? "Usuário sem nome",
+                  email: operator.email,
+                  phone: operator.phone,
+                  region: "",
+                  accessLevel: "operador" as const,
+                  financeEnabled: operator.finance_enabled === true,
+                  negotiationsEnabled: operator.negotiations_enabled === true,
+                  status: "ativo" as const,
+                  latitude: null,
+                  longitude: null,
+                })),
+              );
               if (locations.length) {
                 setClients(
                   locations.map((location) => ({
@@ -881,118 +1145,148 @@ function RoleDashboard({
   const approveUser = async (pendingUser: PendingUser) => {
     const token = localStorage.getItem("acneto-access-token");
     if (!token) return;
-    const role = approvalRoles[pendingUser.id] ?? pendingUser.requested_role;
-    const fields = approvalDriverFields[pendingUser.id];
-    const initialPassword = initialPasswords[pendingUser.id] ?? "";
-    if (["operator", "admin"].includes(role) && initialPassword.length < 8) {
-      showFormError("Informe uma senha inicial com no mínimo 8 caracteres.");
-      return;
-    }
-    const publicDriverRequest = role === "driver" && !pendingUser.company_id;
-    const requiredPublicDriverFields = fields
-      ? [
-          fields.full_name,
-          fields.phone,
-          fields.cpf,
-          fields.cnh,
-          fields.cnh_category,
-          fields.cnh_expires_at,
-          fields.vehicle_model,
-          fields.plate,
-          fields.vehicle_year,
-          fields.city,
-          fields.state,
-          fields.capacity,
-          fields.compartments,
-        ]
-      : [];
-    if (
-      role === "driver" &&
-      (!fields ||
-        (publicDriverRequest
-          ? requiredPublicDriverFields.some(
-              (value) => !String(value ?? "").trim(),
-            )
-          : !fields.full_name.trim() || !fields.phone.trim()))
-    ) {
-      showFormError(
-        publicDriverRequest
-          ? "Preencha todos os dados pessoais, CNH e veículo do motorista antes de aprovar."
-          : "Preencha nome e telefone do motorista antes de aprovar. O veículo é opcional.",
-      );
-      return;
-    }
-    const response = await apiFetch(
-      `/api/admin/users/${pendingUser.id}/approve`,
-      {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+    setProcessingRequest({ id: pendingUser.id, action: "approve" });
+    try {
+      const role = approvalRoles[pendingUser.id] ?? pendingUser.requested_role;
+      const fields = approvalDriverFields[pendingUser.id];
+      const initialPassword = initialPasswords[pendingUser.id] ?? "";
+      if (["operator", "admin"].includes(role) && initialPassword.length < 8) {
+        showFormError("Informe uma senha inicial com no mínimo 8 caracteres.");
+        return;
+      }
+      const publicDriverRequest = role === "driver" && !pendingUser.company_id;
+      const requiredPublicDriverFields = fields
+        ? [
+            fields.full_name,
+            fields.phone,
+            fields.cpf,
+            fields.cnh,
+            fields.cnh_category,
+            fields.cnh_expires_at,
+            fields.vehicle_model,
+            fields.plate,
+            fields.vehicle_year,
+            fields.city,
+            fields.state,
+            fields.capacity,
+            fields.compartments,
+          ]
+        : [];
+      if (
+        role === "driver" &&
+        (!fields ||
+          (publicDriverRequest
+            ? requiredPublicDriverFields.some(
+                (value) => !String(value ?? "").trim(),
+              )
+            : !fields.full_name.trim() || !fields.phone.trim()))
+      ) {
+        showFormError(
+          publicDriverRequest
+            ? "Preencha todos os dados pessoais, CNH e veículo do motorista antes de aprovar."
+            : "Preencha nome e telefone do motorista antes de aprovar. O veículo é opcional.",
+        );
+        return;
+      }
+      const response = await apiFetch(
+        `/api/admin/users/${pendingUser.id}/approve`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            role,
+            initialPassword: ["operator", "admin"].includes(role)
+              ? initialPassword
+              : undefined,
+            driver: fields
+              ? {
+                  fullName: fields.full_name,
+                  phone: fields.phone,
+                  vehicleModel: fields.vehicle_model,
+                  plate: fields.plate,
+                  city: fields.city,
+                  state: fields.state,
+                  capacity: fields.capacity,
+                  compartments: fields.compartments,
+                  cpf: fields.cpf,
+                  cnh: fields.cnh,
+                  cnhCategory: fields.cnh_category,
+                  cnhExpiresAt: fields.cnh_expires_at,
+                  vehicleYear: fields.vehicle_year,
+                  locationSharingAuthorized: fields.location_sharing_authorized,
+                }
+              : undefined,
+          }),
         },
-        body: JSON.stringify({
-          role,
-          initialPassword: ["operator", "admin"].includes(role)
-            ? initialPassword
-            : undefined,
-          driver: fields
-            ? {
-                fullName: fields.full_name,
-                phone: fields.phone,
-                vehicleModel: fields.vehicle_model,
-                plate: fields.plate,
-                city: fields.city,
-                state: fields.state,
-                capacity: fields.capacity,
-                compartments: fields.compartments,
-                cpf: fields.cpf,
-                cnh: fields.cnh,
-                cnhCategory: fields.cnh_category,
-                cnhExpiresAt: fields.cnh_expires_at,
-                vehicleYear: fields.vehicle_year,
-                locationSharingAuthorized: fields.location_sharing_authorized,
-              }
-            : undefined,
-        }),
-      },
-    );
-    if (response.ok) {
-      setPendingUsers((current) =>
-        current.filter((user) => user.id !== pendingUser.id),
       );
-    } else {
-      const body = (await response.json()) as { error?: string };
-      showFormError(body.error ?? "Não foi possível finalizar a aprovação.");
+      if (response.ok) {
+        setPendingUsers((current) =>
+          current.filter((user) => user.id !== pendingUser.id),
+        );
+        setRegistrationRequests((current) =>
+          current.filter((user) => user.id !== pendingUser.id),
+        );
+        setApprovalDriverFields((current) => {
+          const next = { ...current };
+          delete next[pendingUser.id];
+          return next;
+        });
+      } else {
+        const body = (await response.json()) as { error?: string };
+        showFormError(body.error ?? "Não foi possível finalizar a aprovação.");
+      }
+    } catch {
+      showFormError(
+        "Não foi possível confirmar a persistência do cadastro. Tente novamente.",
+      );
+    } finally {
+      setProcessingRequest((current) =>
+        current?.id === pendingUser.id ? null : current,
+      );
     }
   };
 
   const rejectUser = async (pendingUser: PendingUser) => {
     const token = localStorage.getItem("acneto-access-token");
     if (!token) return;
-    const response = await apiFetch(
-      `/api/admin/users/${pendingUser.id}/reject`,
-      {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      },
-    );
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string };
-      showFormError(body.error ?? "Não foi possível rejeitar o cadastro.");
-      return;
+    setProcessingRequest({ id: pendingUser.id, action: "reject" });
+    try {
+      const response = await apiFetch(
+        `/api/admin/users/${pendingUser.id}/reject`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (!response.ok) {
+        const body = (await response.json()) as { error?: string };
+        showFormError(body.error ?? "Não foi possível rejeitar o cadastro.");
+        return;
+      }
+      setPendingUsers((current) =>
+        current.filter((user) => user.id !== pendingUser.id),
+      );
+      setRegistrationRequests((current) =>
+        current.filter((user) => user.id !== pendingUser.id),
+      );
+      setApprovalDriverFields((current) => {
+        const next = { ...current };
+        delete next[pendingUser.id];
+        return next;
+      });
+      setPendingRejection(null);
+    } catch {
+      showFormError(
+        "Não foi possível confirmar a exclusão do cadastro. Tente novamente.",
+      );
+    } finally {
+      setProcessingRequest((current) =>
+        current?.id === pendingUser.id ? null : current,
+      );
     }
-    setPendingUsers((current) =>
-      current.filter((user) => user.id !== pendingUser.id),
-    );
-    setRegistrationRequests((current) =>
-      current.filter((user) => user.id !== pendingUser.id),
-    );
-    setApprovalDriverFields((current) => {
-      const next = { ...current };
-      delete next[pendingUser.id];
-      return next;
-    });
-    setPendingRejection(null);
   };
 
   const setApprovalClosed = async (userId: string, closed: boolean) => {
@@ -1090,7 +1384,7 @@ function RoleDashboard({
     setRouteSummary(null);
   };
 
-  const calculateRoute = async () => {
+  const calculateRoute = async (): Promise<boolean> => {
     const selectedDriver = filteredDrivers.find(
       (driver) => driver.id === selectedDriverId,
     );
@@ -1111,7 +1405,7 @@ function RoleDashboard({
       !finalCustomer
     ) {
       setRouteError("Selecione um posto de coleta e um cliente final com GPS.");
-      return;
+      return false;
     }
 
     setRouteLoading(true);
@@ -1165,13 +1459,27 @@ function RoleDashboard({
         ),
       );
       setRouteSummary({ distance: route.distance, duration: route.duration });
+      return true;
     } catch {
       setRouteError("Não foi possível calcular a rota. Tente novamente.");
       setRoutePath([]);
       setRouteSummary(null);
+      return false;
     } finally {
       setRouteLoading(false);
     }
+  };
+
+  const openNegotiation = async () => {
+    if (!(isSuperAdmin || negotiationsEnabled)) {
+      setRouteError(
+        "O módulo de negociações não está liberado para este usuário.",
+      );
+      return;
+    }
+    const calculated = await calculateRoute();
+    if (!calculated) return;
+    setTab("negociacoes");
   };
 
   useEffect(() => {
@@ -1260,6 +1568,11 @@ function RoleDashboard({
           phone: region.trim(),
           role: requestedAccessLevel === "operador" ? "operator" : "admin",
           initialPassword: initialAccessPassword,
+          financeEnabled:
+            requestedAccessLevel === "operador" && financeEnabledForNewOperator,
+          negotiationsEnabled:
+            requestedAccessLevel === "operador" &&
+            negotiationsEnabledForNewOperator,
         }),
       });
       if (!response.ok) {
@@ -1271,6 +1584,8 @@ function RoleDashboard({
       setEmail("");
       setRegion("");
       setInitialAccessPassword("");
+      setFinanceEnabledForNewOperator(false);
+      setNegotiationsEnabledForNewOperator(false);
       setFormSuccess(
         requestedAccessLevel === "admin"
           ? "Administrador criado com sucesso. Ele deverá trocar a senha no primeiro acesso."
@@ -1418,6 +1733,9 @@ function RoleDashboard({
       cnh_category: driver.cnh_category ?? "",
       cnh_expires_at: driver.cnh_expires_at?.slice(0, 10) ?? "",
       location_sharing_authorized: driver.location_sharing_authorized ?? false,
+      employment_type:
+        driver.employment_type === "carrier" ? "carrier" : "autonomous",
+      carrier_id: driver.carrier?.id ?? "",
     });
     setTab("cadastros");
   };
@@ -1433,6 +1751,9 @@ function RoleDashboard({
       if (!response.ok) return;
     }
     setDrivers((items) => items.filter((item) => item.id !== driver.id));
+    setDirectoryDrivers((items) =>
+      items.filter((item) => item.id !== driver.id),
+    );
   };
 
   const handleAddDriver = () => {
@@ -1445,6 +1766,11 @@ function RoleDashboard({
     if (requiredDriverFields.some((field) => !field.trim())) {
       setDriverFormError("Preencha todos os campos obrigatórios do motorista.");
       showFormError("Preencha todos os campos obrigatórios do motorista.");
+      return;
+    }
+    if (driverForm.employment_type === "carrier" && !driverForm.carrier_id) {
+      setDriverFormError("Selecione a transportadora do motorista.");
+      showFormError("Selecione a transportadora do motorista.");
       return;
     }
     setDriverFormError("");
@@ -1472,6 +1798,8 @@ function RoleDashboard({
       cnh_category: driverForm.cnh_category.trim() || null,
       cnh_expires_at: driverForm.cnh_expires_at || null,
       location_sharing_authorized: driverForm.location_sharing_authorized,
+      employment_type: driverForm.employment_type,
+      carrier_id: driverForm.carrier_id,
       homologation_status: "in_analysis",
       current_vehicle: null,
       carrier: null,
@@ -1502,6 +1830,8 @@ function RoleDashboard({
             cnhCategory: newDriver.cnh_category,
             cnhExpiresAt: newDriver.cnh_expires_at,
             locationSharingAuthorized: newDriver.location_sharing_authorized,
+            employmentType: newDriver.employment_type,
+            carrierId: newDriver.carrier_id,
           }),
         });
       }
@@ -1526,6 +1856,8 @@ function RoleDashboard({
                 cnh_expires_at: newDriver.cnh_expires_at,
                 location_sharing_authorized:
                   newDriver.location_sharing_authorized,
+                employment_type: newDriver.employment_type,
+                carrier_id: newDriver.carrier_id,
               }
             : item,
         ),
@@ -1550,6 +1882,8 @@ function RoleDashboard({
       cnh_category: "",
       cnh_expires_at: "",
       location_sharing_authorized: false,
+      employment_type: "autonomous",
+      carrier_id: "",
     });
   };
 
@@ -1627,8 +1961,11 @@ function RoleDashboard({
         actionLabel="Sim, rejeitar e excluir"
         cancelLabel="Cancelar"
         destructive
+        loading={Boolean(processingRequest?.action === "reject")}
         onClose={() => {
-          if (pendingRejection) void rejectUser(pendingRejection);
+          if (pendingRejection && !processingRequest) {
+            void rejectUser(pendingRejection);
+          }
         }}
         onCancel={() => setPendingRejection(null)}
       />
@@ -1653,18 +1990,12 @@ function RoleDashboard({
 
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <AppDownloadButton />
-            <button
-              onClick={() => onSignOut()}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-100"
-            >
-              <LogOut size={16} /> Sair
-            </button>
+            <SettingsMenu onSignOut={onSignOut} />
           </div>
         </header>
 
         <section
-          className={`mb-6 grid gap-4 ${role === "admin" ? "md:grid-cols-3" : "md:grid-cols-2"}`}
+          className={`mb-6 grid gap-4 ${role === "admin" ? "md:grid-cols-4" : "md:grid-cols-3"}`}
         >
           <MetricCard
             icon={Users}
@@ -1689,10 +2020,19 @@ function RoleDashboard({
             active={directory === "drivers"}
             onClick={() => setDirectory("drivers")}
           />
+          {(isSuperAdmin || negotiationsEnabled) && (
+            <MetricCard
+              icon={MessageCircle}
+              label="Negociações ativas"
+              value={String(activeNegotiations)}
+              active={tab === "negociacoes"}
+              onClick={() => setTab("negociacoes")}
+            />
+          )}
         </section>
 
         <div
-          className={`mb-6 grid gap-1 rounded-xl bg-slate-100 p-1 ${role === "admin" || role === "operator" ? "grid-cols-5" : "grid-cols-4"}`}
+          className={`mb-6 grid gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 ${role === "admin" || role === "operator" ? (isSuperAdmin ? "grid-cols-2 sm:grid-cols-4 lg:grid-cols-8" : "grid-cols-2 sm:grid-cols-4 lg:grid-cols-7") : "grid-cols-2 sm:grid-cols-4"}`}
         >
           <button
             onClick={() => setTab("resumo")}
@@ -1704,6 +2044,22 @@ function RoleDashboard({
           >
             Resumo
           </button>
+          {(isSuperAdmin || financeEnabled) && (
+            <button
+              onClick={() => setTab("financeiro")}
+              className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${tab === "financeiro" ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
+            >
+              Financeiro
+            </button>
+          )}
+          {isSuperAdmin && (
+            <button
+              onClick={() => setTab("modulos")}
+              className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${tab === "modulos" ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
+            >
+              Módulos
+            </button>
+          )}
           {(role === "admin" || role === "operator") && (
             <button
               onClick={() => {
@@ -1744,6 +2100,18 @@ function RoleDashboard({
           >
             Meus dados
           </button>
+          {(isSuperAdmin || negotiationsEnabled) && (
+            <button
+              onClick={() => setTab("negociacoes")}
+              className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
+                tab === "negociacoes"
+                  ? "bg-white text-[#0b1d3a] shadow-sm"
+                  : "text-slate-500"
+              }`}
+            >
+              Negociações
+            </button>
+          )}
           {(role === "admin" || role === "operator") && (
             <button
               onClick={() => setTab("solicitacoes")}
@@ -1786,7 +2154,7 @@ function RoleDashboard({
                 onDeleteContact={removeContact}
                 onEditDriver={editDriver}
                 onDeleteDriver={(driver) => void removeDriver(driver)}
-                canDelete={role === "admin"}
+                canDelete
               />
             </section>
           </>
@@ -2113,6 +2481,46 @@ function RoleDashboard({
                         required
                         className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                       />
+                      <select
+                        value={driverForm.employment_type}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            employment_type: e.target.value as
+                              | "autonomous"
+                              | "carrier",
+                            carrier_id:
+                              e.target.value === "autonomous"
+                                ? ""
+                                : prev.carrier_id,
+                          }))
+                        }
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      >
+                        <option value="autonomous">Autônomo</option>
+                        <option value="carrier">
+                          Motorista de transportadora
+                        </option>
+                      </select>
+                      {driverForm.employment_type === "carrier" && (
+                        <select
+                          value={driverForm.carrier_id}
+                          onChange={(e) =>
+                            setDriverForm((prev) => ({
+                              ...prev,
+                              carrier_id: e.target.value,
+                            }))
+                          }
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                        >
+                          <option value="">Selecione a transportadora *</option>
+                          {registeredCompanies.map((company) => (
+                            <option key={company.id} value={company.id}>
+                              {company.name} · {company.cnpj}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                       <input
                         value={driverForm.plate}
                         onChange={(e) =>
@@ -2209,6 +2617,27 @@ function RoleDashboard({
                     </button>
                   </div>
 
+                  {registrationTab === "drivers" && (
+                    <RegistrationList
+                      title="Motoristas cadastrados"
+                      icon={Users}
+                    >
+                      {(directoryDrivers.length
+                        ? directoryDrivers
+                        : drivers
+                      ).map((driver) => (
+                        <RegistryRow
+                          key={driver.id}
+                          title={driver.full_name}
+                          detail={`${driver.phone ?? "Sem telefone"} · ${driver.current_vehicle?.plate ?? (driver.plate || "Sem veículo")}`}
+                          status={driver.homologation_status ?? driver.status}
+                          onEdit={() => editDriver(driver)}
+                          onDelete={() => void removeDriver(driver)}
+                        />
+                      ))}
+                    </RegistrationList>
+                  )}
+
                   <div
                     className={`${registrationTab === "drivers" ? "hidden " : ""}rounded-2xl border border-slate-200 bg-white p-5 shadow-sm`}
                   >
@@ -2297,6 +2726,34 @@ function RoleDashboard({
                           className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
                         />
                       )}
+                      {role === "admin" && accessLevel === "operador" && (
+                        <label className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm text-blue-900 sm:col-span-2">
+                          <input
+                            type="checkbox"
+                            checked={financeEnabledForNewOperator}
+                            onChange={(event) =>
+                              setFinanceEnabledForNewOperator(
+                                event.target.checked,
+                              )
+                            }
+                          />
+                          Permitir que este operador gerencie o financeiro
+                        </label>
+                      )}
+                      {role === "admin" && accessLevel === "operador" && (
+                        <label className="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-sm text-indigo-900 sm:col-span-2">
+                          <input
+                            type="checkbox"
+                            checked={negotiationsEnabledForNewOperator}
+                            onChange={(event) =>
+                              setNegotiationsEnabledForNewOperator(
+                                event.target.checked,
+                              )
+                            }
+                          />
+                          Permitir que este operador gerencie negociações
+                        </label>
+                      )}
                     </div>
 
                     <button
@@ -2306,6 +2763,60 @@ function RoleDashboard({
                       Salvar acesso <ArrowRight size={15} />
                     </button>
                   </div>
+                  {registrationTab === "clients" && (
+                    <RegistrationList title="Clientes cadastrados" icon={Users}>
+                      {clients.map((client) => (
+                        <RegistryRow
+                          key={client.id}
+                          title={client.name}
+                          detail={`${client.email} · ${client.region || "Região não informada"}`}
+                          status={client.status}
+                        />
+                      ))}
+                    </RegistrationList>
+                  )}
+                  {registrationTab === "admins" && (
+                    <RegistrationList title="Acessos cadastrados" icon={Shield}>
+                      {operators.map((operator) => (
+                        <div key={operator.id} className="space-y-2">
+                          <RegistryRow
+                            title={operator.name}
+                            detail={`${operator.email} · ${operator.financeEnabled ? "Financeiro autorizado" : "Financeiro não autorizado"}`}
+                            status={operator.status}
+                          />
+                          {role === "admin" && (
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void toggleOperatorModule(operator, "finance")
+                                }
+                                className="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+                              >
+                                {operator.financeEnabled
+                                  ? "Remover Financeiro"
+                                  : "Autorizar Financeiro"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void toggleOperatorModule(
+                                    operator,
+                                    "negotiations",
+                                  )
+                                }
+                                className="rounded-lg border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                              >
+                                {operator.negotiationsEnabled
+                                  ? "Remover Negociações"
+                                  : "Autorizar Negociações"}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </RegistrationList>
+                  )}
                 </div>
               )}
           </>
@@ -2329,7 +2840,89 @@ function RoleDashboard({
             statusFilter={statusFilter}
             setStatusFilter={setStatusFilter}
             onSelectDriver={setSelectedDriverId}
+            onOpenNegotiation={() => void openNegotiation()}
+            canOpenNegotiation={isSuperAdmin || negotiationsEnabled}
           />
+        ) : tab === "negociacoes" && (isSuperAdmin || negotiationsEnabled) ? (
+          <NegotiationsPanel
+            drivers={directoryDrivers.length ? directoryDrivers : drivers}
+            clients={clients}
+            selectedDriverId={selectedDriverId}
+            selectedClientIds={selectedClientIds}
+            routeDistanceKm={routeSummary ? routeSummary.distance / 1000 : null}
+          />
+        ) : tab === "modulos" && isSuperAdmin ? (
+          <section className="space-y-5">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-600">
+                Superadmin
+              </p>
+              <h2 className="mt-1 text-2xl font-bold text-[#0b1d3a]">
+                Gestão de módulos
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Libere somente os módulos em desenvolvimento para cada
+                administrador ou operador.
+              </p>
+            </div>
+            <div className="space-y-3">
+              {moduleUsers.map((user) => (
+                <div
+                  key={user.id}
+                  className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                >
+                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                    <div>
+                      <p className="font-bold text-[#0b1d3a]">{user.name}</p>
+                      <p className="text-sm text-slate-500">
+                        {user.email} ·{" "}
+                        {user.role === "admin" ? "Administrador" : "Operador"}
+                      </p>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void toggleModuleUser(
+                            user.id,
+                            "finance",
+                            user.finance_enabled,
+                          )
+                        }
+                        className={`rounded-xl px-3 py-2 text-xs font-bold ${user.finance_enabled ? "bg-emerald-600 text-white" : "border border-slate-200 text-slate-600"}`}
+                      >
+                        {user.finance_enabled
+                          ? "Financeiro liberado"
+                          : "Liberar Financeiro"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void toggleModuleUser(
+                            user.id,
+                            "negotiations",
+                            user.negotiations_enabled,
+                          )
+                        }
+                        className={`rounded-xl px-3 py-2 text-xs font-bold ${user.negotiations_enabled ? "bg-indigo-600 text-white" : "border border-slate-200 text-slate-600"}`}
+                      >
+                        {user.negotiations_enabled
+                          ? "Negociações liberadas"
+                          : "Liberar Negociações"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {!moduleUsers.length && (
+                <p className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-500">
+                  Nenhum administrador ou operador gerenciável encontrado.
+                </p>
+              )}
+            </div>
+          </section>
+        ) : tab === "financeiro" && (isSuperAdmin || financeEnabled) ? (
+          <FinancePanel />
         ) : tab === "solicitacoes" ? (
           <div className="space-y-5">
             <PendingVehiclesPanel
@@ -2377,6 +2970,7 @@ function RoleDashboard({
               }
               onApprove={(request) => void approveUser(request)}
               onReject={(request) => setPendingRejection(request)}
+              processingRequest={processingRequest}
               onClose={(userId) => void setApprovalClosed(userId, true)}
               onReopen={(userId) => void setApprovalClosed(userId, false)}
             />
@@ -2793,10 +3387,14 @@ function RegistryRow({
   title,
   detail,
   status,
+  onEdit,
+  onDelete,
 }: {
   title: string;
   detail: string;
   status: string;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
   const labels: Record<string, string> = {
     active: "Ativo",
@@ -2810,9 +3408,33 @@ function RegistryRow({
         <p className="truncate text-sm font-semibold text-[#0b1d3a]">{title}</p>
         <p className="truncate text-xs text-slate-500">{detail}</p>
       </div>
-      <span className="shrink-0 rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">
-        {labels[status] ?? status}
-      </span>
+      <div className="flex shrink-0 items-center gap-2">
+        <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">
+          {labels[status] ?? status}
+        </span>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded-lg p-2 text-slate-500 transition hover:bg-blue-50 hover:text-blue-700"
+            aria-label={`Editar ${title}`}
+            title="Editar motorista"
+          >
+            <Pencil size={15} />
+          </button>
+        )}
+        {onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="rounded-lg p-2 text-slate-500 transition hover:bg-rose-50 hover:text-rose-700"
+            aria-label={`Excluir ${title}`}
+            title="Excluir motorista"
+          >
+            <Trash2 size={15} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -2836,6 +3458,8 @@ function LocationMapView({
   statusFilter,
   setStatusFilter,
   onSelectDriver,
+  onOpenNegotiation,
+  canOpenNegotiation,
 }: {
   drivers: DemoDriver[];
   clients: DemoContact[];
@@ -2855,8 +3479,16 @@ function LocationMapView({
   statusFilter: string;
   setStatusFilter: (value: string) => void;
   onSelectDriver: (value: string | null) => void;
+  onOpenNegotiation: () => void;
+  canOpenNegotiation: boolean;
 }) {
   const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const [driverFocusVersion, setDriverFocusVersion] = useState(0);
+
+  const selectDriver = (driverId: string) => {
+    onSelectDriver(driverId);
+    setDriverFocusVersion((version) => version + 1);
+  };
 
   useEffect(() => {
     setDetailsExpanded(false);
@@ -2895,6 +3527,7 @@ function LocationMapView({
     (client) =>
       Number.isFinite(client.latitude) && Number.isFinite(client.longitude),
   );
+  const searchedClientFocus = locatedClients[0] ?? null;
   const visibleDrivers = routeFocusActive
     ? locatedDrivers.filter((driver) => driver.id === selectedDriverId)
     : locatedDrivers;
@@ -3028,6 +3661,8 @@ function LocationMapView({
               drivers={visibleDrivers}
               clients={visibleClients}
               selectedDriver={selectedDriver}
+              focusedClient={searchedClientFocus}
+              driverFocusVersion={driverFocusVersion}
             />
             {visibleDrivers.map((driver) => {
               const isSelected = selectedDriver?.id === driver.id;
@@ -3037,7 +3672,7 @@ function LocationMapView({
                   position={driverMarkerPosition(driver, locatedDrivers)}
                   icon={truckMarkerIcon(isSelected)}
                   eventHandlers={{
-                    click: () => onSelectDriver(driver.id),
+                    click: () => selectDriver(driver.id),
                     mouseover: (event) => event.target.openPopup(),
                     mouseout: (event) => event.target.closePopup(),
                   }}
@@ -3250,6 +3885,15 @@ function LocationMapView({
                   Telefone do motorista não informado para negociar o frete.
                 </p>
               )}
+              {canOpenNegotiation && (
+                <button
+                  type="button"
+                  onClick={onOpenNegotiation}
+                  className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-100"
+                >
+                  Abrir negociação no sistema
+                </button>
+              )}
             </div>
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
@@ -3317,7 +3961,7 @@ function LocationMapView({
                 <button
                   key={driver.id}
                   type="button"
-                  onClick={() => onSelectDriver(driver.id)}
+                  onClick={() => selectDriver(driver.id)}
                   className={`flex w-full items-center justify-between rounded-xl border p-3 text-left transition ${
                     selectedDriver?.id === driver.id
                       ? "border-blue-200 bg-blue-50"
@@ -3349,14 +3993,20 @@ function MapViewport({
   drivers,
   clients,
   selectedDriver,
+  focusedClient,
+  driverFocusVersion,
 }: {
   drivers: DemoDriver[];
   clients: DemoContact[];
   selectedDriver: DemoDriver | null;
+  focusedClient: DemoContact | null;
+  driverFocusVersion: number;
 }) {
   const map = useMap();
   const hasFitted = useRef(false);
   const previousSelectedId = useRef<string | null>(null);
+  const previousDriverFocusVersion = useRef(0);
+  const previousFocusedClientId = useRef<string | null>(null);
 
   useEffect(() => {
     if (hasFitted.current || (drivers.length === 0 && clients.length === 0))
@@ -3382,19 +4032,39 @@ function MapViewport({
   }, [clients, drivers, map]);
 
   useEffect(() => {
-    if (
+    if (!focusedClient) {
+      previousFocusedClientId.current = null;
+      return;
+    }
+    if (previousFocusedClientId.current !== focusedClient.id) {
+      map.flyTo(
+        [focusedClient.latitude as number, focusedClient.longitude as number],
+        Math.max(map.getZoom(), 14),
+        { duration: 0.6 },
+      );
+    }
+    previousFocusedClientId.current = focusedClient.id;
+  }, [focusedClient, map]);
+
+  useEffect(() => {
+    const hasLocation =
       selectedDriver &&
-      previousSelectedId.current &&
-      previousSelectedId.current !== selectedDriver.id
-    ) {
+      Number.isFinite(selectedDriver.latitude) &&
+      Number.isFinite(selectedDriver.longitude);
+    const shouldFocus =
+      hasLocation &&
+      (previousSelectedId.current !== selectedDriver.id ||
+        previousDriverFocusVersion.current !== driverFocusVersion);
+    if (shouldFocus) {
       map.flyTo(
         [selectedDriver.latitude as number, selectedDriver.longitude as number],
-        Math.max(map.getZoom(), 13),
-        { duration: 0.5 },
+        16,
+        { duration: 0.8 },
       );
     }
     previousSelectedId.current = selectedDriver?.id ?? null;
-  }, [map, selectedDriver]);
+    previousDriverFocusVersion.current = driverFocusVersion;
+  }, [driverFocusVersion, map, selectedDriver]);
 
   return null;
 }

@@ -1,4 +1,4 @@
-import { CheckCircle2, X } from "lucide-react";
+import { CheckCircle2, Loader2, X } from "lucide-react";
 
 export function ConfirmationModal({
   open,
@@ -8,6 +8,7 @@ export function ConfirmationModal({
   cancelLabel,
   onCancel,
   destructive = false,
+  loading = false,
   onClose,
 }: {
   open: boolean;
@@ -17,6 +18,7 @@ export function ConfirmationModal({
   cancelLabel?: string;
   onCancel?: () => void;
   destructive?: boolean;
+  loading?: boolean;
   onClose: () => void;
 }) {
   if (!open) return null;
@@ -59,7 +61,8 @@ export function ConfirmationModal({
           {cancelLabel && (
             <button
               type="button"
-              onClick={onCancel ?? onClose}
+              onClick={loading ? undefined : (onCancel ?? onClose)}
+              disabled={loading}
               className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50"
             >
               {cancelLabel}
@@ -67,10 +70,17 @@ export function ConfirmationModal({
           )}
           <button
             type="button"
-            onClick={onClose}
-            className={`flex-1 rounded-xl px-4 py-3 text-sm font-semibold text-white ${destructive ? "bg-rose-600 hover:bg-rose-700" : "bg-[#1052c7] hover:bg-[#0b3f9f]"}`}
+            onClick={loading ? undefined : onClose}
+            disabled={loading}
+            className={`flex-1 rounded-xl px-4 py-3 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60 ${destructive ? "bg-rose-600 hover:bg-rose-700" : "bg-[#1052c7] hover:bg-[#0b3f9f]"}`}
           >
-            {actionLabel}
+            {loading ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 size={16} className="animate-spin" /> Processando...
+              </span>
+            ) : (
+              actionLabel
+            )}
           </button>
         </div>
       </div>
