@@ -14,7 +14,6 @@ import {
   Settings,
   ChevronRight,
   Power,
-  CheckCircle2,
   Loader2,
   Edit3,
   Save,
@@ -560,7 +559,7 @@ function TopBar({
             <span
               className={`h-1.5 w-1.5 rounded-full ${driver.is_online ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`}
             />
-            {driver.is_online ? "Online" : "Não disponível"}
+            {driver.is_online ? "Online" : "Offline"}
           </div>
         </div>
       </div>
@@ -704,7 +703,7 @@ function HomeView({
           }
           className="mt-4 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-400"
         >
-          {!driver.is_online && <option value="offline">Não disponível</option>}
+          {!driver.is_online && <option value="offline">Offline</option>}
           {operationalStatuses.map((status) => (
             <option key={status.value} value={status.value}>
               {status.label}
@@ -871,7 +870,6 @@ export function ProfileView({ driver }: { driver: Driver }) {
     vehicle_year: driver.vehicle_year?.toString() ?? "",
     plate: driver.plate ?? "",
     cnh: driver.cnh ?? "",
-    cnh_expires_at: driver.cnh_expires_at?.slice(0, 10) ?? "",
     city: driver.city ?? "",
     state: driver.state ?? "",
   });
@@ -889,7 +887,6 @@ export function ProfileView({ driver }: { driver: Driver }) {
       vehicle_year: form.vehicle_year ? parseInt(form.vehicle_year) : null,
       plate: form.plate || null,
       cnh: form.cnh || null,
-      cnh_expires_at: form.cnh_expires_at || null,
       city: form.city || null,
       state: form.state || null,
     };
@@ -907,7 +904,6 @@ export function ProfileView({ driver }: { driver: Driver }) {
           vehicleYear: updatedDriver.vehicle_year,
           plate: updatedDriver.plate,
           cnh: updatedDriver.cnh,
-          cnhExpiresAt: updatedDriver.cnh_expires_at,
           city: updatedDriver.city,
           state: updatedDriver.state,
         }),
@@ -1019,13 +1015,6 @@ export function ProfileView({ driver }: { driver: Driver }) {
             value={form.cnh}
             editing={editing}
             onChange={(v) => setForm({ ...form, cnh: v })}
-          />
-          <ProfileField
-            icon={Calendar}
-            label="Validade da CNH"
-            value={form.cnh_expires_at}
-            editing={editing}
-            onChange={(v) => setForm({ ...form, cnh_expires_at: v })}
           />
         </div>
       </div>

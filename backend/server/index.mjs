@@ -210,8 +210,6 @@ const publicDriver = (driver) => ({
   last_seen: driver.lastSeen?.toISOString() || null,
   status: driver.status,
   notes: driver.notes,
-  availability_city: driver.availabilityCity,
-  availability_at: driver.availabilityAt?.toISOString() || null,
   employment_type: driver.employmentType,
   availability_since: driver.availabilitySince?.toISOString() || null,
   rating: driver.rating,
@@ -774,13 +772,7 @@ app.patch("/api/drivers/me/status", auth, async (request, response) => {
   const { isOnline, status, notes } = request.body || {};
   const validStatuses = ["offline", "available", "awaiting_loading", "awaiting_documents", "in_transit", "at_collection", "awaiting_unloading", "driver_completed", "in_negotiation", "on_trip"];
   if (typeof isOnline !== "boolean" || !validStatuses.includes(status)) return response.status(400).json({ error: "Status inválido" });
-  const availabilityAt = typeof request.body?.availabilityAt === "string" && request.body.availabilityAt
-    ? new Date(request.body.availabilityAt)
-    : null;
-  if (isOnline && (!Number.isFinite(availabilityAt?.getTime()) || typeof request.body?.availabilityCity !== "string" || !request.body.availabilityCity.trim())) {
-    return response.status(400).json({ error: "Informe a cidade, a data e o horário previstos para ficar disponível" });
-  }
-  const driver = await prisma.driver.update({ where: { id: request.user.driver.id }, data: { isOnline, status, notes, lastSeen: new Date(), availabilityCity: isOnline ? request.body.availabilityCity.trim() : request.user.driver.availabilityCity, availabilityAt: isOnline ? availabilityAt : request.user.driver.availabilityAt, availabilitySince: isOnline ? new Date() : request.user.driver.availabilitySince } });
+  const driver = await prisma.driver.update({ where: { id: request.user.driver.id }, data: { isOnline, status, notes, lastSeen: new Date(), availabilitySince: isOnline ? new Date() : request.user.driver.availabilitySince } });
   broadcast("driver-status");
   response.json({ driver: publicDriver(driver) });
 });

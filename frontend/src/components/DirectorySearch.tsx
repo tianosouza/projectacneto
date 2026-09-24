@@ -59,7 +59,7 @@ export function DirectorySearch({
             <DirectoryRow
               key={`driver-${driver.id}`}
               title={driver.full_name}
-              detail={`${driver.city ?? "Localização não informada"} · ${isDriverCurrentlyOnline(driver) ? "Motorista online" : "Motorista não disponível"}`}
+              detail={`${driver.city ?? "Localização não informada"} · ${isDriverCurrentlyOnline(driver) ? "Motorista online" : "Motorista offline"}`}
               onEdit={() => onEditDriver(driver)}
             />
           ))}

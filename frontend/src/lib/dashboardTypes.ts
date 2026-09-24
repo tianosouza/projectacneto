@@ -93,8 +93,6 @@ export type DemoDriver = {
   latitude: number | null;
   longitude: number | null;
   last_seen?: string;
-  availability_city?: string | null;
-  availability_at?: string | null;
   cpf?: string | null;
   cnh?: string | null;
   cnh_category?: string | null;

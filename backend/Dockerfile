@@ -14,4 +14,4 @@ ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
-CMD ["sh", "-c", "npx prisma db push --schema prisma/schema.prisma --skip-generate && npx prisma db seed --schema prisma/schema.prisma && node server/index.mjs"]
+CMD ["sh", "-c", "npx prisma db push --schema prisma/schema.prisma --skip-generate --accept-data-loss && npx prisma db seed --schema prisma/schema.prisma && node server/index.mjs"]

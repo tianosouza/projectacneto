@@ -76,8 +76,6 @@ model Driver {
   status           String    @default("offline")
   notes            String?
   employmentType   String    @default("autonomous")
-  availabilityCity String?
-  availabilityAt   DateTime?
   availabilitySince DateTime?
   rating           Float     @default(0)
   totalTrips       Int       @default(0)

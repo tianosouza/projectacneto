@@ -8,6 +8,7 @@ import {
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import { useEffect, useState } from "react";
+import logo from "./assets/logo.png";
 import {
   ActivityIndicator,
   Alert,
@@ -17,7 +18,6 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -82,8 +82,6 @@ type Driver = {
     cnpj: string;
   } | null;
   homologation_status?: string;
-  availability_city?: string | null;
-  availability_at?: string | null;
 };
 
 type MobileNegotiation = {
@@ -108,7 +106,7 @@ const statusLabels: Record<string, string> = {
   in_transit: "Frete em andamento",
   awaiting_unloading: "Aguardando descarga",
   in_negotiation: "Em negociação",
-  offline: "Não disponível",
+  offline: "Offline",
   pending: "Nova oferta",
   countered: "Contraproposta",
   accepted: "Aceita - aguardando início",
@@ -283,7 +281,6 @@ function AppContent() {
     "background" | "foreground" | null
   >(null);
   const [screen, setScreen] = useState<MobileScreen>("home");
-  const [nextAvailabilityPrompt, setNextAvailabilityPrompt] = useState(false);
   const [negotiations, setNegotiations] = useState<MobileNegotiation[]>([]);
   const [walletPreview, setWalletPreview] = useState<{
     total: number;
@@ -397,43 +394,6 @@ function AppContent() {
     await refreshNegotiations();
   }
 
-  async function saveNextAvailability(availability: {
-    city: string;
-    date: string;
-    time: string;
-  }) {
-    if (!driver || !token) return;
-    const availabilityAt = new Date(
-      `${availability.date}T${availability.time}:00`,
-    ).toISOString();
-    const response = await apiFetch("/api/drivers/me/status", {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        isOnline: driver.is_online,
-        status: driver.status,
-        notes: driver.notes,
-        availabilityCity: availability.city,
-        availabilityAt,
-      }),
-    });
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string };
-      Alert.alert(
-        "Próxima disponibilidade",
-        body.error ?? "Não foi possível salvar o próximo ponto.",
-      );
-      return;
-    }
-    const body = (await response.json()) as { driver: Driver };
-    setDriver(body.driver);
-    await AsyncStorage.setItem(DRIVER_KEY, JSON.stringify(body.driver));
-    setNextAvailabilityPrompt(false);
-  }
-
   async function sendNegotiationOffer(negotiationId: string, amount: number) {
     if (!token || !Number.isFinite(amount) || amount <= 0) return;
     const response = await apiFetch(
@@ -531,7 +491,6 @@ function AppContent() {
       await AsyncStorage.setItem(DRIVER_KEY, JSON.stringify(body.driver));
     }
     await refreshNegotiations();
-    if (step === "finish") setNextAvailabilityPrompt(true);
   }
 
   async function restoreSession() {
@@ -586,10 +545,7 @@ function AppContent() {
     }
   }
 
-  async function toggleOnline(
-    value: boolean,
-    availability?: { city: string; date: string; time: string },
-  ) {
+  async function toggleOnline(value: boolean) {
     if (!driver || !token) return;
     setSubmitting(true);
     try {
@@ -599,21 +555,13 @@ function AppContent() {
         setTrackingMode(null);
       }
       const status = value ? "available" : "offline";
-      const availabilityAt = availability
-        ? new Date(`${availability.date}T${availability.time}:00`).toISOString()
-        : undefined;
       const response = await apiFetch("/api/drivers/me/status", {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          isOnline: value,
-          status,
-          availabilityCity: availability?.city,
-          availabilityAt,
-        }),
+        body: JSON.stringify({ isOnline: value, status }),
       });
       if (!response.ok)
         throw new Error("Não foi possível atualizar seu status.");
@@ -791,13 +739,8 @@ function AppContent() {
   return (
     <DriverHome
       driver={driver}
-      trackingMode={trackingMode}
       submitting={submitting}
       onToggle={toggleOnline}
-      nextAvailabilityPrompt={nextAvailabilityPrompt}
-      onSaveAvailability={(availability) =>
-        void saveNextAvailability(availability)
-      }
       onLogout={logout}
       onOpenDriverData={() => setScreen("driver-data")}
       onOpenVehicle={() => setScreen("vehicle")}
@@ -848,7 +791,7 @@ function LoginScreen({
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" />
       <View style={styles.loginTop}>
-        <Image source={require("./assets/logo.png")} style={styles.logo} />
+        <Image source={logo} style={styles.logo} />
         <Text style={styles.eyebrow}>NEXT DRIVER</Text>
         <Text style={styles.loginTitle}>Para motoristas em movimento.</Text>
         <Text style={styles.loginSubtitle}>
@@ -892,11 +835,8 @@ function LoginScreen({
 
 function DriverHome({
   driver,
-  trackingMode,
   submitting,
   onToggle,
-  nextAvailabilityPrompt,
-  onSaveAvailability,
   onLogout,
   onOpenDriverData,
   onOpenVehicle,
@@ -908,18 +848,8 @@ function DriverHome({
   walletPreview,
 }: {
   driver: Driver;
-  trackingMode: "background" | "foreground" | null;
   submitting: boolean;
-  onToggle: (
-    value: boolean,
-    availability?: { city: string; date: string; time: string },
-  ) => void;
-  nextAvailabilityPrompt: boolean;
-  onSaveAvailability: (availability: {
-    city: string;
-    date: string;
-    time: string;
-  }) => void;
+  onToggle: (value: boolean) => void;
   onLogout: () => void;
   onOpenDriverData: () => void;
   onOpenVehicle: () => void;
@@ -935,21 +865,6 @@ function DriverHome({
   } | null;
 }) {
   const insets = useSafeAreaInsets();
-  const [availabilityFormOpen, setAvailabilityFormOpen] = useState(false);
-  useEffect(() => {
-    if (nextAvailabilityPrompt) setAvailabilityFormOpen(true);
-  }, [nextAvailabilityPrompt]);
-  const [availabilityCity, setAvailabilityCity] = useState(
-    driver.availability_city ?? driver.city ?? "",
-  );
-  const [availabilityDate, setAvailabilityDate] = useState(
-    driver.availability_at?.slice(0, 10) ??
-      new Date().toISOString().slice(0, 10),
-  );
-  const [availabilityTime, setAvailabilityTime] = useState(
-    driver.availability_at?.slice(11, 16) ??
-      new Date().toTimeString().slice(0, 5),
-  );
   const coordinates =
     driver.latitude !== null && driver.longitude !== null
       ? `${driver.latitude.toFixed(5)}, ${driver.longitude.toFixed(5)}`
@@ -979,10 +894,7 @@ function DriverHome({
 
         <TouchableOpacity
           disabled={submitting}
-          onPress={() => {
-            if (driver.is_online) onToggle(false);
-            else setAvailabilityFormOpen(true);
-          }}
+          onPress={() => onToggle(!driver.is_online)}
           style={[
             styles.availabilityHero,
             driver.is_online && styles.availabilityActive,
@@ -1031,13 +943,13 @@ function DriverHome({
             {submitting
               ? "CAPTURANDO GPS..."
               : driver.is_online
-                ? "ONLINE"
-                : "NÃO DISPONÍVEL"}
+                ? "DISPONÍVEL"
+                : "INATIVO"}
           </Text>
           <Text style={styles.availabilityDescription}>
             {driver.is_online
-              ? "Motorista online e visível para a central de vendas"
-              : "Motorista não disponível e oculto do painel do operador"}
+              ? "Visível para a central de vendas"
+              : "Não aparece no painel do operador"}
           </Text>
           <Text style={styles.availabilityLocation}>
             ● {driver.city || "Localização aguardando GPS"}
@@ -1047,84 +959,6 @@ function DriverHome({
               : ""}
           </Text>
         </TouchableOpacity>
-
-        {availabilityFormOpen &&
-          (!driver.is_online || nextAvailabilityPrompt) && (
-            <View style={styles.availabilityFormCard}>
-              <Text style={styles.statusListTitle}>
-                {nextAvailabilityPrompt
-                  ? "QUAL SERÁ O PRÓXIMO PONTO?"
-                  : "ONDE E QUANDO ESTARÁ DISPONÍVEL?"}
-              </Text>
-              <Text style={styles.availabilityFormHint}>
-                Informe cidade, data e hora para a central poder vender o
-                próximo frete antes da sua chegada.
-              </Text>
-              <TextInput
-                value={availabilityCity}
-                onChangeText={setAvailabilityCity}
-                placeholder="Cidade prevista"
-                placeholderTextColor="#94a3b8"
-                style={styles.input}
-              />
-              <View style={styles.availabilityFormRow}>
-                <TextInput
-                  value={availabilityDate}
-                  onChangeText={setAvailabilityDate}
-                  placeholder="Data (AAAA-MM-DD)"
-                  placeholderTextColor="#94a3b8"
-                  keyboardType="numbers-and-punctuation"
-                  style={[styles.input, styles.availabilityFormHalf]}
-                />
-                <TextInput
-                  value={availabilityTime}
-                  onChangeText={setAvailabilityTime}
-                  placeholder="Hora (HH:MM)"
-                  placeholderTextColor="#94a3b8"
-                  keyboardType="numbers-and-punctuation"
-                  style={[styles.input, styles.availabilityFormHalf]}
-                />
-              </View>
-              <View style={styles.availabilityFormActions}>
-                <TouchableOpacity
-                  onPress={() => setAvailabilityFormOpen(false)}
-                  style={styles.secondaryButton}
-                >
-                  <Text style={styles.secondaryButtonText}>Cancelar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  disabled={submitting}
-                  onPress={() => {
-                    if (
-                      !availabilityCity.trim() ||
-                      !/^\d{4}-\d{2}-\d{2}$/.test(availabilityDate) ||
-                      !/^\d{2}:\d{2}$/.test(availabilityTime)
-                    ) {
-                      Alert.alert(
-                        "Dados incompletos",
-                        "Informe cidade, data e horário no formato indicado.",
-                      );
-                      return;
-                    }
-                    setAvailabilityFormOpen(false);
-                    const availability = {
-                      city: availabilityCity.trim(),
-                      date: availabilityDate,
-                      time: availabilityTime,
-                    };
-                    if (nextAvailabilityPrompt) {
-                      onSaveAvailability(availability);
-                    } else {
-                      onToggle(true, availability);
-                    }
-                  }}
-                  style={styles.primaryButton}
-                >
-                  <Text style={styles.primaryButtonText}>Ficar disponível</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
 
         <View style={styles.statusListCard}>
           <Text style={styles.statusListTitle}>MEU STATUS ATUAL</Text>
@@ -1713,11 +1547,6 @@ function DriverDataScreen({
             onChange={(value) => updateField("state", value)}
           />
           <DataRow
-            label="Disponibilidade"
-            value={driver.is_online ? "Online" : "Não disponível"}
-            accent={driver.is_online}
-          />
-          <DataRow
             label="Status"
             value={statusLabels[driver.status] ?? driver.status}
             accent={driver.is_online}
@@ -1780,7 +1609,6 @@ function DataRow({
   value: string;
   accent?: boolean;
 }) {
-  const insets = useSafeAreaInsets();
   return (
     <View style={styles.dataRow}>
       <Text style={styles.dataRowLabel}>{label}</Text>
@@ -1867,47 +1695,6 @@ function VehicleScreen({
         </View>
       </ScrollView>
       <MobileBottomNav screen="vehicle" onNavigate={onNavigate} />
-    </SafeAreaView>
-  );
-}
-
-function HistoryScreen({
-  driver,
-  onBack,
-}: {
-  driver: Driver;
-  onBack: () => void;
-}) {
-  const status = statusLabels[driver.status] ?? driver.status;
-  return (
-    <SafeAreaView style={styles.dataSafe}>
-      <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={styles.dataScreen}>
-        <DataScreenHeader title="Histórico de status" onBack={onBack} />
-        <View style={styles.historyCard}>
-          <View style={[styles.historyDot, { backgroundColor: "#fff000" }]} />
-          <View style={styles.historyCopy}>
-            <Text style={styles.historyStatus}>{status.toUpperCase()}</Text>
-            <Text style={styles.historyPlace}>
-              {driver.city || "Localização não informada"}
-              {driver.state ? `, ${driver.state}` : ""}
-            </Text>
-          </View>
-          <Text style={styles.historyTime}>Agora</Text>
-        </View>
-        <View style={styles.historyCard}>
-          <View style={[styles.historyDot, { backgroundColor: "#6ccdf5" }]} />
-          <View style={styles.historyCopy}>
-            <Text style={styles.historyStatus}>LOCALIZAÇÃO</Text>
-            <Text style={styles.historyPlace}>Última atualização GPS</Text>
-          </View>
-          <Text style={styles.historyTime}>
-            {driver.last_seen
-              ? new Date(driver.last_seen).toLocaleTimeString("pt-BR")
-              : "--:--"}
-          </Text>
-        </View>
-      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -2090,17 +1877,6 @@ function DataScreenHeader({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.stat}>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text numberOfLines={2} style={styles.statValue}>
-        {value}
-      </Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#07399f" },
   safeLight: { flex: 1, backgroundColor: "#07399f" },
@@ -2279,32 +2055,6 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   availabilityActive: { backgroundColor: "#062c83" },
-  availabilityFormCard: {
-    backgroundColor: "#062c83",
-    borderColor: "#2251ad",
-    borderWidth: 1,
-    marginTop: 12,
-    padding: 16,
-  },
-  availabilityFormHint: {
-    color: "#8eb6ff",
-    fontSize: 11,
-    lineHeight: 16,
-    marginBottom: 12,
-    marginTop: 6,
-  },
-  availabilityFormRow: { flexDirection: "row", gap: 10 },
-  availabilityFormHalf: { flex: 1 },
-  availabilityFormActions: { flexDirection: "row", gap: 10 },
-  secondaryButton: {
-    alignItems: "center",
-    borderColor: "#2251ad",
-    borderWidth: 1,
-    flex: 1,
-    justifyContent: "center",
-    minHeight: 52,
-  },
-  secondaryButtonText: { color: "#8eb6ff", fontSize: 12, fontWeight: "800" },
   availabilityRing: {
     alignItems: "center",
     borderColor: "#1749a9",

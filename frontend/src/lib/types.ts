@@ -55,8 +55,6 @@ export type Driver = {
   last_seen: string | null;
   status: DriverStatus;
   notes: string | null;
-  availability_city?: string | null;
-  availability_at?: string | null;
   availability_since: string | null;
   rating: number;
   total_trips: number;
