@@ -16,6 +16,7 @@ export type DemoContact = {
   address?: string | null;
   city?: string | null;
   state?: string | null;
+  company_ids?: string[];
   financeEnabled?: boolean;
   negotiationsEnabled?: boolean;
 };
@@ -80,6 +81,8 @@ export type DemoDriver = {
   compartments: string;
   notes: string;
   availability_since: string;
+  availability_city?: string | null;
+  availability_at?: string | null;
   is_online: boolean;
   rating: number;
   status:

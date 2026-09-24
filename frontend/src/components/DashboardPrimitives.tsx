@@ -129,7 +129,7 @@ export function DirectoryPanel({
       ? "Clientes"
       : directory === "operators"
         ? "Operadores"
-        : "Motoristas online";
+        : "Motoristas disponíveis";
   const contacts = directory === "clients" ? clients : operators;
 
   return (
@@ -159,7 +159,7 @@ export function DirectoryPanel({
               <DirectoryRow
                 key={driver.id}
                 title={driver.full_name}
-                detail={`${driver.current_vehicle ? `${driver.current_vehicle.plate} · ${driver.current_vehicle.type}` : (driver.vehicle_model ?? "Veículo não vinculado")} · ${driver.carrier?.name ?? "Autônomo"} · ${driver.city ?? "GPS atual"}`}
+                detail={`${driver.availability_city ? `Previsto em ${driver.availability_city} · ${formatDriverAvailability(driver.availability_at)}` : (driver.city ?? "Cidade não informada")} · ${formatDriverLastSeen(driver.last_seen)} · ${driver.current_vehicle ? `${driver.current_vehicle.plate} · ${driver.current_vehicle.type}` : (driver.vehicle_model ?? "Veículo não vinculado")} · ${driver.carrier?.name ?? "Autônomo"}`}
                 badge={driver.homologation_status ?? "Em análise"}
                 onEdit={() => onEditDriver(driver)}
                 onDelete={canDelete ? () => onDeleteDriver(driver) : undefined}
@@ -185,4 +185,36 @@ export function DirectoryPanel({
       </div>
     </div>
   );
+}
+
+function formatDriverLastSeen(value: string | undefined): string {
+  if (!value) return "Data/hora não informada";
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return "Data/hora não informada";
+  return `Atualizado em ${timestamp.toLocaleString("pt-BR")}`;
+}
+
+function formatDriverAvailability(value: string | null | undefined): string {
+  if (!value) return "Data/hora não informada";
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return "Data/hora não informada";
+  const today = new Date();
+  const dateOnly = new Date(
+    timestamp.getFullYear(),
+    timestamp.getMonth(),
+    timestamp.getDate(),
+  ).getTime();
+  const todayOnly = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  ).getTime();
+  const dayDifference = Math.round((dateOnly - todayOnly) / 86_400_000);
+  const dayLabel =
+    dayDifference === 0
+      ? "Hoje"
+      : dayDifference === 1
+        ? "Amanhã"
+        : timestamp.toLocaleDateString("pt-BR");
+  return `${dayLabel} às ${timestamp.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
 }

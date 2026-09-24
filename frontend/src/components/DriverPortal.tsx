@@ -86,6 +86,11 @@ export function DriverPortal() {
     "idle" | "tracking" | "denied" | "unavailable"
   >("idle");
   const [locationPromptOpen, setLocationPromptOpen] = useState(false);
+  const [availabilityFormOpen, setAvailabilityFormOpen] = useState(false);
+  const [availabilityCity, setAvailabilityCity] = useState("");
+  const [availabilityDate, setAvailabilityDate] = useState("");
+  const [availabilityTime, setAvailabilityTime] = useState("");
+  const [availabilityError, setAvailabilityError] = useState("");
   const [pendingNegotiations, setPendingNegotiations] = useState(0);
   const [walletPreview, setWalletPreview] = useState<{
     total: number;
@@ -355,6 +360,23 @@ export function DriverPortal() {
 
   const toggleOnline = async () => {
     if (!driver || toggling) return;
+    if (!driver.is_online) {
+      setAvailabilityCity(driver.availability_city ?? driver.city ?? "");
+      setAvailabilityDate(
+        driver.availability_at
+          ? new Date(driver.availability_at).toISOString().slice(0, 10)
+          : "",
+      );
+      setAvailabilityTime(
+        driver.availability_at
+          ? new Date(driver.availability_at).toTimeString().slice(0, 5)
+          : "",
+      );
+      setAvailabilityError("");
+      setAvailabilityFormOpen(true);
+      return;
+    }
+
     setToggling(true);
     const newOnline = !driver.is_online;
     const newStatus = newOnline ? "available" : "offline";
@@ -373,7 +395,12 @@ export function DriverPortal() {
       await apiFetch("/api/drivers/me/status", {
         method: "PATCH",
         headers: apiHeaders(),
-        body: JSON.stringify({ isOnline: newOnline, status: newStatus }),
+        body: JSON.stringify({
+          isOnline: newOnline,
+          status: newStatus,
+          availabilityCity: null,
+          availabilityAt: null,
+        }),
       });
     } else {
       localStorage.setItem("acneto-driver", JSON.stringify(updated));
@@ -381,6 +408,58 @@ export function DriverPortal() {
       window.dispatchEvent(new Event("acneto-driver-location"));
     }
     setDriver(updated);
+    setToggling(false);
+  };
+
+  const confirmAvailability = async () => {
+    if (!driver || toggling) return;
+    if (!availabilityCity.trim() || !availabilityDate || !availabilityTime) {
+      setAvailabilityError("Informe a cidade, data e hora previstas.");
+      return;
+    }
+    const availabilityAt = new Date(`${availabilityDate}T${availabilityTime}`);
+    if (!Number.isFinite(availabilityAt.getTime())) {
+      setAvailabilityError("Informe uma data e hora válidas.");
+      return;
+    }
+
+    setToggling(true);
+    const now = new Date().toISOString();
+    const updated = {
+      ...driver,
+      is_online: true,
+      status: "available",
+      last_seen: now,
+      availability_since: now,
+      availability_city: availabilityCity.trim(),
+      availability_at: availabilityAt.toISOString(),
+    } as Driver;
+    if (accessToken()) {
+      const response = await apiFetch("/api/drivers/me/status", {
+        method: "PATCH",
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          isOnline: true,
+          status: "available",
+          availabilityCity: availabilityCity.trim(),
+          availabilityAt: availabilityAt.toISOString(),
+        }),
+      });
+      if (!response.ok) {
+        const body = (await response.json()) as { error?: string };
+        setAvailabilityError(
+          body.error ?? "Não foi possível atualizar sua disponibilidade.",
+        );
+        setToggling(false);
+        return;
+      }
+    } else {
+      localStorage.setItem("acneto-driver", JSON.stringify(updated));
+      syncOperatorDriver(updated);
+      window.dispatchEvent(new Event("acneto-driver-location"));
+    }
+    setDriver(updated);
+    setAvailabilityFormOpen(false);
     setToggling(false);
   };
 
@@ -413,7 +492,7 @@ export function DriverPortal() {
                 </h2>
                 <p className="mt-1 text-sm leading-relaxed text-slate-500">
                   Autorize a localização para que os operadores encontrem você
-                  no mapa quando estiver online.
+                  no mapa quando estiver disponível.
                 </p>
               </div>
             </div>
@@ -437,6 +516,83 @@ export function DriverPortal() {
         </div>
       )}
 
+      {availabilityFormOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-600">
+                  Disponibilidade
+                </p>
+                <h2 className="mt-1 text-xl font-bold text-[#0b1d3a]">
+                  Onde e quando você estará disponível?
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Essas informações ajudam a operação a oferecer fretes antes da
+                  sua chegada.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAvailabilityFormOpen(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
+                aria-label="Fechar disponibilidade"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mt-5 space-y-3">
+              <label className="block text-xs font-semibold text-slate-600">
+                Cidade prevista *
+                <input
+                  value={availabilityCity}
+                  onChange={(event) => setAvailabilityCity(event.target.value)}
+                  placeholder="Ex.: Fortaleza"
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-normal outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block text-xs font-semibold text-slate-600">
+                  Data prevista *
+                  <input
+                    type="date"
+                    value={availabilityDate}
+                    onChange={(event) =>
+                      setAvailabilityDate(event.target.value)
+                    }
+                    className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-normal outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  />
+                </label>
+                <label className="block text-xs font-semibold text-slate-600">
+                  Hora prevista *
+                  <input
+                    type="time"
+                    value={availabilityTime}
+                    onChange={(event) =>
+                      setAvailabilityTime(event.target.value)
+                    }
+                    className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-normal outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  />
+                </label>
+              </div>
+              {availabilityError && (
+                <p className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                  {availabilityError}
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={() => void confirmAvailability()}
+                disabled={toggling}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0e4db7] px-4 py-3 text-sm font-bold text-white disabled:opacity-60"
+              >
+                {toggling ? "Atualizando..." : "Confirmar disponibilidade"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 pb-28 sm:px-6 lg:pb-10">
         {tab === "home" && (
           <HomeView
@@ -453,6 +609,8 @@ export function DriverPortal() {
                     isOnline: updated.is_online,
                     status: updated.status,
                     notes: updated.notes,
+                    availabilityCity: updated.availability_city,
+                    availabilityAt: updated.availability_at,
                   }),
                 });
               } else {
@@ -516,6 +674,8 @@ function syncOperatorDriver(driver: Driver) {
         status: driver.status,
         availability_since:
           driver.availability_since ?? new Date().toISOString(),
+        availability_city: driver.availability_city ?? null,
+        availability_at: driver.availability_at ?? null,
         latitude: driver.latitude,
         longitude: driver.longitude,
         last_seen: driver.last_seen ?? new Date().toISOString(),
@@ -559,7 +719,7 @@ function TopBar({
             <span
               className={`h-1.5 w-1.5 rounded-full ${driver.is_online ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`}
             />
-            {driver.is_online ? "Online" : "Offline"}
+            {driver.is_online ? "Estou disponível" : "Não disponível"}
           </div>
         </div>
       </div>
@@ -593,7 +753,7 @@ function HomeView({
   onOpenWallet: () => void;
 }) {
   const operationalStatuses: { value: Driver["status"]; label: string }[] = [
-    { value: "available", label: "Disponível" },
+    { value: "available", label: "Estou disponível" },
     { value: "awaiting_loading", label: "Aguardando carregamento" },
     { value: "awaiting_documents", label: "Aguardando documentação" },
     { value: "awaiting_loading", label: "Aguardando carregamento" },
@@ -619,8 +779,8 @@ function HomeView({
             </h1>
             <p className="mt-2 text-sm text-white/70">
               {driver.is_online
-                ? "Você está visível para os operadores."
-                : "Fique online para receber propostas de frete."}
+                ? "Você está disponível para os operadores."
+                : "Fique disponível para receber propostas de frete."}
             </p>
           </div>
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15 backdrop-blur">
@@ -637,7 +797,7 @@ function HomeView({
           ) : (
             <Power size={18} />
           )}
-          {driver.is_online ? "Ficar Offline" : "Ficar Online"}
+          {driver.is_online ? "Ficar não disponível" : "Ficar disponível"}
         </button>
       </div>
 
@@ -703,7 +863,7 @@ function HomeView({
           }
           className="mt-4 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-400"
         >
-          {!driver.is_online && <option value="offline">Offline</option>}
+          {!driver.is_online && <option value="offline">Não disponível</option>}
           {operationalStatuses.map((status) => (
             <option key={status.value} value={status.value}>
               {status.label}
@@ -1651,7 +1811,7 @@ function OnboardingView({ fullName }: { fullName: string }) {
         </h1>
         <p className="mt-2 text-sm text-slate-500">
           Sua conta foi criada. Complete seu cadastro no perfil para começar a
-          ficar online e receber propostas de frete.
+          ficar disponível e receber propostas de frete.
         </p>
         <div className="mt-6 flex items-center justify-center gap-2 text-sm font-semibold text-[#1052c7]">
           <Zap size={16} /> Aguardando liberação do administrador
@@ -1691,8 +1851,8 @@ function BottomNav({ tab, setTab }: { tab: Tab; setTab: (tab: Tab) => void }) {
 
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
-    offline: "Offline",
-    available: "Disponível",
+    offline: "Não disponível",
+    available: "Estou disponível",
     in_negotiation: "Negociando",
     on_trip: "Em viagem",
   };

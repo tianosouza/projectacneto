@@ -17,6 +17,8 @@ import {
   UserPlus,
   Users,
   MapPin,
+  IdCard,
+  CalendarDays,
   ArrowRight,
   MessageCircle,
   Pencil,
@@ -45,6 +47,7 @@ import {
 } from "@/lib/dashboardData";
 import { AuthScreen, InitialPasswordScreen } from "@/components/AuthScreen";
 import { DriverPortal } from "@/components/DriverPortal";
+import { ClientPortal } from "@/components/ClientPortal";
 import { AccountCenter } from "@/components/AccountCenter";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { DirectoryPanel, MetricCard } from "@/components/DashboardPrimitives";
@@ -77,6 +80,16 @@ function App() {
 
   if (profile?.role === "driver") {
     return <DriverPortal />;
+  }
+
+  if (profile?.role === "client") {
+    return (
+      <ClientPortal
+        fullName={user.user_metadata.full_name ?? "Cliente"}
+        email={user.email}
+        onSignOut={signOut}
+      />
+    );
   }
 
   if (profile?.role === "operator") {
@@ -153,11 +166,25 @@ function CarrierDashboard({
       current_driver?: { id: string; full_name: string } | null;
     }>
   >([]);
+  const [mapDrivers, setMapDrivers] = useState<DemoDriver[]>([]);
+  const [mapLocations, setMapLocations] = useState<DemoContact[]>([]);
   const [driverForm, setDriverForm] = useState({
     fullName: "",
     email: "",
     phone: "",
     password: "",
+    cpf: "",
+    cnh: "",
+    cnhCategory: "",
+    cnhExpiresAt: "",
+    city: "",
+    state: "",
+    vehicleModel: "",
+    vehicleYear: "",
+    plate: "",
+    capacity: "",
+    compartments: "",
+    locationSharingAuthorized: false,
   });
   const [vehicleForm, setVehicleForm] = useState({
     type: "",
@@ -166,7 +193,11 @@ function CarrierDashboard({
     compartments: "",
     products: "",
   });
+  const [activeTab, setActiveTab] = useState<"drivers" | "vehicles" | "map">(
+    "drivers",
+  );
   const [error, setError] = useState("");
+  const [driverStatusMessage, setDriverStatusMessage] = useState("");
   const [assignmentDriverIds, setAssignmentDriverIds] = useState<
     Record<string, string>
   >({});
@@ -176,7 +207,10 @@ function CarrierDashboard({
   };
 
   const refresh = async () => {
-    const response = await apiFetch("/api/carrier/registrations", { headers });
+    const [response, mapResponse] = await Promise.all([
+      apiFetch("/api/carrier/registrations", { headers }),
+      apiFetch("/api/carrier/map", { headers }),
+    ]);
     if (response.ok) {
       const body = (await response.json()) as {
         drivers: DemoDriver[];
@@ -185,23 +219,72 @@ function CarrierDashboard({
       setDrivers(body.drivers);
       setVehicles(body.vehicles);
     }
+    if (mapResponse.ok) {
+      const body = (await mapResponse.json()) as {
+        drivers: DemoDriver[];
+        locations: Array<{
+          id: string;
+          kind: "collection_point" | "final_customer";
+          name: string;
+          email: string | null;
+          phone: string | null;
+          address: string | null;
+          city: string | null;
+          state: string | null;
+          latitude: number | null;
+          longitude: number | null;
+        }>;
+      };
+      setMapDrivers(body.drivers);
+      setMapLocations(
+        body.locations.map((location) => ({
+          ...location,
+          region: location.city ?? location.state ?? "",
+          accessLevel: "cliente",
+          status: "ativo",
+        })),
+      );
+    }
   };
 
   useEffect(() => {
     void refresh();
+    const refreshInterval = window.setInterval(() => void refresh(), 5000);
+    return () => window.clearInterval(refreshInterval);
   }, []);
 
   const submitDriver = async () => {
     setError("");
+    setDriverStatusMessage("");
     const response = await apiFetch("/api/carrier/drivers", {
       method: "POST",
       headers,
-      body: JSON.stringify(driverForm),
+      body: JSON.stringify({ ...driverForm, employmentType: "carrier" }),
     });
     const body = (await response.json()) as { error?: string };
     if (!response.ok)
       return setError(body.error ?? "Não foi possível cadastrar o motorista");
-    setDriverForm({ fullName: "", email: "", phone: "", password: "" });
+    setDriverForm({
+      fullName: "",
+      email: "",
+      phone: "",
+      password: "",
+      cpf: "",
+      cnh: "",
+      cnhCategory: "",
+      cnhExpiresAt: "",
+      city: "",
+      state: "",
+      vehicleModel: "",
+      vehicleYear: "",
+      plate: "",
+      capacity: "",
+      compartments: "",
+      locationSharingAuthorized: false,
+    });
+    setDriverStatusMessage(
+      "Motorista cadastrado e em análise. Aguarde a aprovação do operador ou administrador.",
+    );
     await refresh();
   };
 
@@ -269,176 +352,561 @@ function CarrierDashboard({
             {error}
           </div>
         )}
-        <div className="grid gap-6 xl:grid-cols-2">
-          <RegistrationCard title="Solicitar motorista" icon={Users}>
-            <input
-              value={driverForm.fullName}
-              onChange={(e) =>
-                setDriverForm((form) => ({ ...form, fullName: e.target.value }))
-              }
-              placeholder="Nome completo *"
-              className={registrationInputClass}
-            />
-            <input
-              value={driverForm.email}
-              onChange={(e) =>
-                setDriverForm((form) => ({ ...form, email: e.target.value }))
-              }
-              placeholder="E-mail *"
-              type="email"
-              className={registrationInputClass}
-            />
-            <input
-              value={driverForm.phone}
-              onChange={(e) =>
-                setDriverForm((form) => ({ ...form, phone: e.target.value }))
-              }
-              placeholder="Celular / WhatsApp *"
-              className={registrationInputClass}
-            />
-            <input
-              value={driverForm.password}
-              onChange={(e) =>
-                setDriverForm((form) => ({ ...form, password: e.target.value }))
-              }
-              placeholder="Senha inicial *"
-              type="password"
-              className={registrationInputClass}
-            />
-            <p className="text-xs text-slate-500 sm:col-span-2">
-              O vínculo com veículo é opcional e pode ser feito depois da
-              aprovação.
-            </p>
-            <button
-              type="button"
-              onClick={() => void submitDriver()}
-              className={registrationButtonClass}
-            >
-              Enviar para aprovação <ArrowRight size={15} />
-            </button>
-            <input
-              value={vehicleForm.type}
-              onChange={(e) =>
-                setVehicleForm((form) => ({ ...form, type: e.target.value }))
-              }
-              placeholder="Tipo do veículo *"
-              className={registrationInputClass}
-            />
-            <input
-              value={vehicleForm.plate}
-              onChange={(e) =>
-                setVehicleForm((form) => ({
-                  ...form,
-                  plate: e.target.value.toUpperCase(),
-                }))
-              }
-              placeholder="Placa do cavalo *"
-              className={registrationInputClass}
-            />
-            <input
-              value={vehicleForm.capacity}
-              onChange={(e) =>
-                setVehicleForm((form) => ({
-                  ...form,
-                  capacity: e.target.value,
-                }))
-              }
-              placeholder="Capacidade total"
-              className={registrationInputClass}
-            />
-            <input
-              value={vehicleForm.compartments}
-              onChange={(e) =>
-                setVehicleForm((form) => ({
-                  ...form,
-                  compartments: e.target.value,
-                }))
-              }
-              placeholder="Compartimentação"
-              className={registrationInputClass}
-            />
-            <input
-              value={vehicleForm.products}
-              onChange={(e) =>
-                setVehicleForm((form) => ({
-                  ...form,
-                  products: e.target.value,
-                }))
-              }
-              placeholder="Produtos habilitados (separe por vírgula)"
-              className={`${registrationInputClass} sm:col-span-2`}
-            />
-            <button
-              type="button"
-              onClick={() => void submitVehicle()}
-              className={registrationButtonClass}
-            >
-              Enviar para aprovação <ArrowRight size={15} />
-            </button>
-          </RegistrationCard>
+        {driverStatusMessage && activeTab === "drivers" && (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+            {driverStatusMessage}
+          </div>
+        )}
+        <div className="grid grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm sm:max-w-2xl">
+          <button
+            type="button"
+            onClick={() => setActiveTab("drivers")}
+            className={`flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-bold transition ${activeTab === "drivers" ? "bg-[#0e4db7] text-white shadow-md" : "text-slate-600 hover:bg-slate-100"}`}
+          >
+            <Users size={18} /> Motoristas
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("vehicles")}
+            className={`flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-bold transition ${activeTab === "vehicles" ? "bg-[#0e4db7] text-white shadow-md" : "text-slate-600 hover:bg-slate-100"}`}
+          >
+            <Truck size={18} /> Veículos
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("map")}
+            className={`flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-bold transition ${activeTab === "map" ? "bg-[#0e4db7] text-white shadow-md" : "text-slate-600 hover:bg-slate-100"}`}
+          >
+            <MapPin size={18} /> Localizar
+          </button>
         </div>
-        <div className="grid gap-6 xl:grid-cols-2">
-          <RegistrationList title="Motoristas da transportadora" icon={Users}>
-            {drivers.map((driver) => (
-              <RegistryRow
-                key={driver.id}
-                title={driver.full_name}
-                detail={`${driver.phone ?? "Sem telefone"} · ${driver.current_vehicle?.plate ?? "Sem veículo vinculado"}`}
-                status={driver.homologation_status ?? "in_analysis"}
-              />
-            ))}
-          </RegistrationList>
-          <RegistrationList title="Veículos da transportadora" icon={Truck}>
-            {vehicles.map((vehicle) => (
-              <div key={vehicle.id} className="space-y-2">
-                <RegistryRow
-                  title={`${vehicle.plate} · ${vehicle.type}`}
-                  detail={`${vehicle.capacity ?? "Capacidade não informada"} · ${vehicle.products.join(", ") || "Sem produto habilitado"} · ${vehicle.current_driver?.full_name ?? "Sem motorista"}`}
-                  status={vehicle.status}
-                />
-                {vehicle.status === "active" && (
-                  <div className="flex gap-2">
-                    <select
-                      value={
-                        assignmentDriverIds[vehicle.id] ??
-                        vehicle.current_driver?.id ??
-                        ""
-                      }
-                      onChange={(event) =>
-                        setAssignmentDriverIds((current) => ({
-                          ...current,
-                          [vehicle.id]: event.target.value,
+        {activeTab !== "map" && (
+          <div className="space-y-6">
+            <RegistrationCard
+              title={
+                activeTab === "drivers"
+                  ? "Cadastrar motorista"
+                  : "Cadastrar veículo"
+              }
+              icon={activeTab === "drivers" ? Users : Truck}
+            >
+              {activeTab === "drivers" && (
+                <>
+                  <input
+                    value={driverForm.fullName}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        fullName: e.target.value,
+                      }))
+                    }
+                    placeholder="Nome completo *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.email}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        email: e.target.value,
+                      }))
+                    }
+                    placeholder="E-mail *"
+                    type="email"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.phone}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        phone: e.target.value,
+                      }))
+                    }
+                    placeholder="Celular / WhatsApp *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.password}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        password: e.target.value,
+                      }))
+                    }
+                    placeholder="Senha inicial *"
+                    type="password"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.cpf}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        cpf: e.target.value,
+                      }))
+                    }
+                    placeholder="CPF *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.cnh}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        cnh: e.target.value,
+                      }))
+                    }
+                    placeholder="CNH *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.cnhCategory}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        cnhCategory: e.target.value.toUpperCase(),
+                      }))
+                    }
+                    placeholder="Categoria da CNH *"
+                    className={registrationInputClass}
+                  />
+                  <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-500">
+                    <CalendarDays
+                      size={18}
+                      className="shrink-0 text-slate-400"
+                    />
+                    <input
+                      type="date"
+                      value={driverForm.cnhExpiresAt}
+                      onChange={(e) =>
+                        setDriverForm((form) => ({
+                          ...form,
+                          cnhExpiresAt: e.target.value,
                         }))
                       }
-                      className={`${registrationInputClass} min-w-0 flex-1`}
-                    >
-                      <option value="">Selecionar motorista</option>
-                      {drivers
-                        .filter(
-                          (driver) => driver.homologation_status === "active",
-                        )
-                        .map((driver) => (
-                          <option key={driver.id} value={driver.id}>
-                            {driver.full_name}
-                          </option>
-                        ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => void assignDriver(vehicle.id)}
-                      className="rounded-xl bg-[#0e4db7] px-3 py-2 text-xs font-semibold text-white"
-                    >
-                      Vincular
-                    </button>
+                      className="min-w-0 flex-1 bg-transparent outline-none"
+                      aria-label="Validade da CNH"
+                    />
+                  </label>
+                  <input
+                    value={driverForm.city}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        city: e.target.value,
+                      }))
+                    }
+                    placeholder="Cidade *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.state}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        state: e.target.value.toUpperCase(),
+                      }))
+                    }
+                    placeholder="UF *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.vehicleModel}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        vehicleModel: e.target.value,
+                      }))
+                    }
+                    placeholder="Tipo / modelo do veículo *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.vehicleYear}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        vehicleYear: e.target.value
+                          .replace(/\D/g, "")
+                          .slice(0, 4),
+                      }))
+                    }
+                    placeholder="Ano do veículo *"
+                    inputMode="numeric"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.plate}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        plate: e.target.value.toUpperCase(),
+                      }))
+                    }
+                    placeholder="Placa *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.capacity}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        capacity: e.target.value,
+                      }))
+                    }
+                    placeholder="Capacidade *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={driverForm.compartments}
+                    onChange={(e) =>
+                      setDriverForm((form) => ({
+                        ...form,
+                        compartments: e.target.value,
+                      }))
+                    }
+                    placeholder="Compartimentação *"
+                    className={registrationInputClass}
+                  />
+                  <p className="text-xs text-slate-500 sm:col-span-2">
+                    Este motorista será vinculado automaticamente à sua
+                    transportadora.
+                  </p>
+                  <label className="flex items-center gap-2 text-xs text-slate-600 sm:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={driverForm.locationSharingAuthorized}
+                      onChange={(e) =>
+                        setDriverForm((form) => ({
+                          ...form,
+                          locationSharingAuthorized: e.target.checked,
+                        }))
+                      }
+                    />
+                    Autorizo o compartilhamento da localização do motorista.
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void submitDriver()}
+                    className={registrationButtonClass}
+                  >
+                    Enviar para aprovação <ArrowRight size={15} />
+                  </button>
+                </>
+              )}
+              {activeTab === "vehicles" && (
+                <>
+                  <input
+                    value={vehicleForm.type}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        type: e.target.value,
+                      }))
+                    }
+                    placeholder="Tipo do veículo *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={vehicleForm.plate}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        plate: e.target.value.toUpperCase(),
+                      }))
+                    }
+                    placeholder="Placa do cavalo *"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={vehicleForm.capacity}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        capacity: e.target.value,
+                      }))
+                    }
+                    placeholder="Capacidade total"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={vehicleForm.compartments}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        compartments: e.target.value,
+                      }))
+                    }
+                    placeholder="Compartimentação"
+                    className={registrationInputClass}
+                  />
+                  <input
+                    value={vehicleForm.products}
+                    onChange={(e) =>
+                      setVehicleForm((form) => ({
+                        ...form,
+                        products: e.target.value,
+                      }))
+                    }
+                    placeholder="Produtos habilitados (separe por vírgula)"
+                    className={`${registrationInputClass} sm:col-span-2`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void submitVehicle()}
+                    className={registrationButtonClass}
+                  >
+                    Enviar para aprovação <ArrowRight size={15} />
+                  </button>
+                </>
+              )}
+            </RegistrationCard>
+            {activeTab === "drivers" && (
+              <RegistrationList
+                title="Motoristas da transportadora"
+                icon={Users}
+              >
+                {drivers.map((driver) => (
+                  <RegistryRow
+                    key={driver.id}
+                    title={driver.full_name}
+                    detail={`${driver.phone ?? "Sem telefone"} · ${driver.current_vehicle?.plate ?? "Sem veículo vinculado"}`}
+                    status={driver.homologation_status ?? "in_analysis"}
+                  />
+                ))}
+              </RegistrationList>
+            )}
+            {activeTab === "vehicles" && (
+              <RegistrationList title="Veículos da transportadora" icon={Truck}>
+                {vehicles.map((vehicle) => (
+                  <div key={vehicle.id} className="space-y-2">
+                    <RegistryRow
+                      title={`${vehicle.plate} · ${vehicle.type}`}
+                      detail={`${vehicle.capacity ?? "Capacidade não informada"} · ${vehicle.products.join(", ") || "Sem produto habilitado"} · ${vehicle.current_driver?.full_name ?? "Sem motorista"}`}
+                      status={vehicle.status}
+                    />
+                    {vehicle.status === "active" && (
+                      <div className="flex gap-2">
+                        <select
+                          value={
+                            assignmentDriverIds[vehicle.id] ??
+                            vehicle.current_driver?.id ??
+                            ""
+                          }
+                          onChange={(event) =>
+                            setAssignmentDriverIds((current) => ({
+                              ...current,
+                              [vehicle.id]: event.target.value,
+                            }))
+                          }
+                          className={`${registrationInputClass} min-w-0 flex-1`}
+                        >
+                          <option value="">Selecionar motorista</option>
+                          {drivers
+                            .filter(
+                              (driver) =>
+                                driver.homologation_status === "active",
+                            )
+                            .map((driver) => (
+                              <option key={driver.id} value={driver.id}>
+                                {driver.full_name}
+                              </option>
+                            ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => void assignDriver(vehicle.id)}
+                          className="rounded-xl bg-[#0e4db7] px-3 py-2 text-xs font-semibold text-white"
+                        >
+                          Vincular
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            ))}
-          </RegistrationList>
-        </div>
+                ))}
+              </RegistrationList>
+            )}
+          </div>
+        )}
+        {activeTab === "map" && (
+          <CarrierLocationMap drivers={mapDrivers} locations={mapLocations} />
+        )}
       </main>
     </div>
   );
+}
+
+function CarrierLocationMap({
+  drivers,
+  locations,
+}: {
+  drivers: DemoDriver[];
+  locations: DemoContact[];
+}) {
+  const onlineDrivers = useMemo(
+    () => drivers.filter(isDriverCurrentlyOnline),
+    [drivers],
+  );
+  const [clientSearch, setClientSearch] = useState("");
+  const [selectedClientIds, setSelectedClientIds] = useState<string[]>([]);
+  const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
+  const [cityFilter, setCityFilter] = useState("Todas");
+  const [statusFilter, setStatusFilter] = useState("Todos");
+
+  useEffect(() => {
+    if (
+      selectedDriverId &&
+      !onlineDrivers.some((driver) => driver.id === selectedDriverId)
+    ) {
+      setSelectedDriverId(null);
+    }
+    setSelectedClientIds((current) =>
+      current.filter((id) => locations.some((location) => location.id === id)),
+    );
+  }, [onlineDrivers, locations, selectedDriverId]);
+
+  return (
+    <LocationMapView
+      drivers={onlineDrivers}
+      clients={locations}
+      clientSearch={clientSearch}
+      setClientSearch={setClientSearch}
+      onClearClientSelection={() => setSelectedClientIds([])}
+      selectedClientIds={selectedClientIds}
+      routePath={[]}
+      routeSummary={null}
+      routeLoading={false}
+      routeError=""
+      onToggleClient={(clientId) =>
+        setSelectedClientIds((current) =>
+          current.includes(clientId)
+            ? current.filter((id) => id !== clientId)
+            : [...current, clientId],
+        )
+      }
+      onCalculateRoute={() => undefined}
+      selectedDriverId={selectedDriverId}
+      cityFilter={cityFilter}
+      setCityFilter={setCityFilter}
+      statusFilter={statusFilter}
+      setStatusFilter={setStatusFilter}
+      onSelectDriver={setSelectedDriverId}
+      onOpenNegotiation={() => undefined}
+      canOpenNegotiation={false}
+      showRoutePanel={false}
+    />
+  );
+}
+
+function CarrierLocationMapLegacy({
+  drivers,
+  locations,
+}: {
+  drivers: DemoDriver[];
+  locations: DemoContact[];
+}) {
+  const locatedDrivers = drivers.filter(
+    (driver) =>
+      isDriverCurrentlyOnline(driver) &&
+      Number.isFinite(driver.latitude) &&
+      Number.isFinite(driver.longitude),
+  );
+  const locatedClients = locations.filter(
+    (location) =>
+      Number.isFinite(location.latitude) && Number.isFinite(location.longitude),
+  );
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <MapPin size={18} className="text-[#1052c7]" />
+            <h2 className="text-lg font-bold text-[#0b1d3a]">
+              Motoristas e pontos liberados
+            </h2>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            Exibe somente motoristas disponíveis da sua transportadora e locais
+            autorizados pela operação.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
+          <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">
+            {locatedDrivers.length} motorista(s) disponíveis
+          </span>
+          <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">
+            {locatedClients.length} ponto(s) liberado(s)
+          </span>
+        </div>
+      </div>
+      {locatedDrivers.length === 0 && locatedClients.length === 0 ? (
+        <div className="flex min-h-80 items-center justify-center p-6 text-center text-sm text-slate-500">
+          Nenhum motorista disponível ou ponto liberado com localização
+          disponível.
+        </div>
+      ) : (
+        <MapContainer
+          center={[-14.235, -51.925]}
+          zoom={4}
+          scrollWheelZoom
+          className="h-[min(68vh,560px)] min-h-[360px] w-full"
+        >
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          {locatedDrivers.map((driver) => (
+            <Marker
+              key={`driver-${driver.id}`}
+              position={[driver.latitude as number, driver.longitude as number]}
+              icon={carrierDriverIcon()}
+            >
+              <Popup>
+                <strong>{driver.full_name}</strong>
+                <br />
+                Motorista disponível
+                {driver.vehicle_model ? ` · ${driver.vehicle_model}` : ""}
+              </Popup>
+            </Marker>
+          ))}
+          {locatedClients.map((location) => (
+            <Marker
+              key={`location-${location.id}`}
+              position={[
+                location.latitude as number,
+                location.longitude as number,
+              ]}
+              icon={clientMarkerIcon(location.kind)}
+            >
+              <Popup>
+                <strong>{location.name}</strong>
+                <br />
+                {location.kind === "collection_point"
+                  ? "Posto de coleta"
+                  : "Cliente final"}
+                {location.city ? ` · ${location.city}` : ""}
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+      )}
+    </section>
+  );
+}
+
+function carrierDriverIcon() {
+  return divIcon({
+    className: "carrier-driver-marker",
+    iconSize: [38, 38],
+    iconAnchor: [19, 19],
+    html: renderToStaticMarkup(
+      <div className="flex h-[38px] w-[38px] items-center justify-center rounded-full border-2 border-white bg-emerald-600 text-white shadow-lg">
+        <Users size={19} />
+      </div>,
+    ),
+  });
 }
 
 function RoleDashboard({
@@ -480,6 +948,7 @@ function RoleDashboard({
     "collection_point" | "final_customer"
   >("final_customer");
   const [locationAddress, setLocationAddress] = useState("");
+  const [locationCompanyIds, setLocationCompanyIds] = useState<string[]>([]);
   const [accessLevel, setAccessLevel] = useState<AccessLevel>(
     role === "admin" ? "operador" : "cliente",
   );
@@ -885,6 +1354,7 @@ function RoleDashboard({
                 status: "ativo" as const,
                 latitude: location.latitude,
                 longitude: location.longitude,
+                company_ids: location.company_ids ?? [],
                 address: location.address,
                 city: location.city,
                 state: location.state,
@@ -993,6 +1463,7 @@ function RoleDashboard({
                     status: "ativo" as const,
                     latitude: location.latitude,
                     longitude: location.longitude,
+                    company_ids: location.company_ids ?? [],
                     address: location.address,
                     city: location.city,
                     state: location.state,
@@ -1330,7 +1801,11 @@ function RoleDashboard({
           Date.now() - new Date(driver.last_seen as string).getTime() <=
             2 * 60 * 1000,
       )
-      .filter((driver) => cityFilter === "Todas" || driver.city === cityFilter)
+      .filter(
+        (driver) =>
+          cityFilter === "Todas" ||
+          (driver.availability_city ?? driver.city) === cityFilter,
+      )
       .filter(
         (driver) => statusFilter === "Todos" || driver.status === statusFilter,
       )
@@ -1637,6 +2112,7 @@ function RoleDashboard({
           city: cityText,
           latitude: coordinates.latitude,
           longitude: coordinates.longitude,
+          companyIds: locationCompanyIds,
         }),
       });
       if (!response.ok) {
@@ -1651,6 +2127,7 @@ function RoleDashboard({
       setLocationPhone("");
       setRegion("");
       setLocationAddress("");
+      setLocationCompanyIds([]);
       setFormSuccess("Cadastro criado com sucesso.");
       return;
     }
@@ -1992,7 +2469,7 @@ function RoleDashboard({
           )}
           <MetricCard
             icon={Truck}
-            label="Motoristas online"
+            label="Motoristas disponíveis"
             value={String(activeDrivers)}
             active={directory === "drivers"}
             onClick={() => setDirectory("drivers")}
@@ -2678,6 +3155,44 @@ function RoleDashboard({
                             placeholder="Endereço completo do ponto"
                             className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
                           />
+                          <div className="space-y-2 rounded-xl border border-blue-100 bg-blue-50/60 p-3 sm:col-span-2">
+                            <p className="text-xs font-bold uppercase tracking-wide text-blue-900">
+                              Liberar visualização para transportadoras
+                            </p>
+                            {registeredCompanies.length === 0 ? (
+                              <p className="text-xs text-slate-500">
+                                Nenhuma transportadora cadastrada para liberar.
+                              </p>
+                            ) : (
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                {registeredCompanies.map((company) => (
+                                  <label
+                                    key={company.id}
+                                    className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm text-slate-700"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={locationCompanyIds.includes(
+                                        company.id,
+                                      )}
+                                      onChange={(event) =>
+                                        setLocationCompanyIds((current) =>
+                                          event.target.checked
+                                            ? [...current, company.id]
+                                            : current.filter(
+                                                (id) => id !== company.id,
+                                              ),
+                                        )
+                                      }
+                                    />
+                                    <span className="min-w-0 truncate">
+                                      {company.name}
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </>
                       )}
                       {registrationTab === "admins" && (
@@ -2741,16 +3256,19 @@ function RoleDashboard({
                     </button>
                   </div>
                   {registrationTab === "clients" && (
-                    <RegistrationList title="Clientes cadastrados" icon={Users}>
-                      {clients.map((client) => (
-                        <RegistryRow
-                          key={client.id}
-                          title={client.name}
-                          detail={`${client.email} · ${client.region || "Região não informada"}`}
-                          status={client.status}
-                        />
-                      ))}
-                    </RegistrationList>
+                    <ClientVisibilityPanel
+                      clients={clients}
+                      companies={registeredCompanies}
+                      onUpdated={(clientId, companyIds) =>
+                        setClients((current) =>
+                          current.map((client) =>
+                            client.id === clientId
+                              ? { ...client, company_ids: companyIds }
+                              : client,
+                          ),
+                        )
+                      }
+                    />
                   )}
                   {registrationTab === "admins" && (
                     <RegistrationList title="Acessos cadastrados" icon={Shield}>
@@ -3359,6 +3877,173 @@ const registrationInputClass =
 const registrationButtonClass =
   "inline-flex items-center justify-center gap-2 rounded-xl bg-[#0e4db7] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/15 transition hover:bg-[#0a3a90] sm:col-span-2";
 
+function ClientVisibilityPanel({
+  clients,
+  companies,
+  onUpdated,
+}: {
+  clients: DemoContact[];
+  companies: Array<{ id: string; name: string; cnpj: string; status: string }>;
+  onUpdated: (clientId: string, companyIds: string[]) => void;
+}) {
+  const [selectedCompanies, setSelectedCompanies] = useState<
+    Record<string, string[]>
+  >({});
+  const [savingClientId, setSavingClientId] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    setSelectedCompanies((current) => {
+      const next = { ...current };
+      const clientIds = new Set(clients.map((client) => client.id));
+      clients.forEach((client) => {
+        if (!(client.id in next)) {
+          next[client.id] = client.company_ids ?? [];
+        }
+      });
+      Object.keys(next).forEach((clientId) => {
+        if (!clientIds.has(clientId)) delete next[clientId];
+      });
+      return next;
+    });
+  }, [clients]);
+
+  const toggleCompany = (clientId: string, companyId: string) => {
+    setSelectedCompanies((current) => {
+      const selected = current[clientId] ?? [];
+      return {
+        ...current,
+        [clientId]: selected.includes(companyId)
+          ? selected.filter((id) => id !== companyId)
+          : [...selected, companyId],
+      };
+    });
+    setMessage("");
+  };
+
+  const saveVisibility = async (client: DemoContact) => {
+    const token = localStorage.getItem("acneto-access-token");
+    if (!token || !client.kind) {
+      setMessage("Este cliente ainda não possui um ponto operacional salvo.");
+      return;
+    }
+    setSavingClientId(client.id);
+    setMessage("");
+    const response = await apiFetch(`/api/operations/locations/${client.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        kind: client.kind,
+        name: client.name,
+        email: client.email,
+        phone: client.phone,
+        address: client.address,
+        city: client.city,
+        state: client.state,
+        latitude: client.latitude,
+        longitude: client.longitude,
+        companyIds: selectedCompanies[client.id] ?? [],
+        active: true,
+      }),
+    });
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string };
+      setMessage(body.error ?? "Não foi possível salvar as permissões.");
+      setSavingClientId(null);
+      return;
+    }
+    onUpdated(client.id, selectedCompanies[client.id] ?? []);
+    setMessage("Permissões atualizadas com sucesso.");
+    setSavingClientId(null);
+  };
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm xl:col-span-2">
+      <div className="mb-5">
+        <h2 className="text-lg font-bold text-[#0b1d3a]">
+          Visibilidade dos clientes para transportadoras
+        </h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Escolha quais transportadoras poderão visualizar cada cliente final ou
+          posto de coleta no mapa.
+        </p>
+      </div>
+      {message && (
+        <p className="mb-4 rounded-xl bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-800">
+          {message}
+        </p>
+      )}
+      {clients.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+          Nenhum cliente operacional cadastrado.
+        </p>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {clients.map((client) => (
+            <div
+              key={client.id}
+              className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="truncate font-bold text-[#0b1d3a]">
+                    {client.name}
+                  </h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {client.kind === "collection_point"
+                      ? "Posto de coleta"
+                      : "Cliente final"}
+                    {client.city ? ` · ${client.city}` : ""}
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[10px] font-semibold text-slate-500">
+                  {(selectedCompanies[client.id] ?? []).length} liberada(s)
+                </span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {companies.length === 0 ? (
+                  <p className="text-xs text-slate-500">
+                    Nenhuma transportadora cadastrada.
+                  </p>
+                ) : (
+                  companies.map((company) => (
+                    <label
+                      key={company.id}
+                      className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm text-slate-700"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={(selectedCompanies[client.id] ?? []).includes(
+                          company.id,
+                        )}
+                        onChange={() => toggleCompany(client.id, company.id)}
+                      />
+                      <span className="min-w-0 truncate">{company.name}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => void saveVisibility(client)}
+                disabled={savingClientId === client.id}
+                className="mt-3 w-full rounded-xl bg-[#0e4db7] px-3 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {savingClientId === client.id
+                  ? "Salvando..."
+                  : "Salvar visibilidade"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function RegistrationCard({
   title,
   icon: Icon,
@@ -3476,6 +4161,7 @@ function LocationMapView({
   onSelectDriver,
   onOpenNegotiation,
   canOpenNegotiation,
+  showRoutePanel = true,
 }: {
   drivers: DemoDriver[];
   clients: DemoContact[];
@@ -3497,6 +4183,7 @@ function LocationMapView({
   onSelectDriver: (value: string | null) => void;
   onOpenNegotiation: () => void;
   canOpenNegotiation: boolean;
+  showRoutePanel?: boolean;
 }) {
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [driverFocusVersion, setDriverFocusVersion] = useState(0);
@@ -3512,7 +4199,13 @@ function LocationMapView({
 
   const cities = [
     "Todas",
-    ...Array.from(new Set(drivers.map((driver) => driver.city))),
+    ...Array.from(
+      new Set(
+        drivers
+          .map((driver) => driver.availability_city ?? driver.city)
+          .filter(Boolean),
+      ),
+    ),
   ];
   const selectedDriver =
     drivers.find((driver) => driver.id === selectedDriverId) ??
@@ -3699,6 +4392,12 @@ function LocationMapView({
                     {driver.city ?? "Localização GPS atual"}
                     {driver.state ? ` · ${driver.state}` : ""}
                     <br />
+                    Transportadora: {driver.carrier?.name ?? "Não informada"}
+                    <br />
+                    {driver.availability_city
+                      ? `Previsto em ${driver.availability_city} · ${formatAvailabilityForecast(driver.availability_at)}`
+                      : "Previsão de cidade não informada"}
+                    <br />
                     Atualizado às {formatAvailabilityTime(driver.last_seen)}
                   </Popup>
                 </Marker>
@@ -3744,7 +4443,7 @@ function LocationMapView({
           {visibleDrivers.length === 0 && (
             <div className="pointer-events-none absolute left-1/2 top-5 z-[1000] -translate-x-1/2 rounded-2xl border border-amber-200 bg-white/95 px-4 py-3 text-center shadow-lg backdrop-blur">
               <p className="text-sm font-bold text-amber-800">
-                Nenhum motorista online
+                Nenhum motorista disponível
               </p>
               <p className="mt-0.5 text-xs text-slate-500">
                 {clientSearch.trim()
@@ -3783,6 +4482,18 @@ function LocationMapView({
                     {selectedDriver.city || "Localização não informada"} ·{" "}
                     {selectedDriver.capacity || "Capacidade não informada"}
                   </p>
+                  <p className="mt-1 text-xs font-semibold text-blue-700">
+                    Transportadora:{" "}
+                    {selectedDriver.carrier?.name ?? "Não informada"}
+                  </p>
+                  {selectedDriver.availability_city && (
+                    <p className="mt-1 text-xs font-semibold text-emerald-700">
+                      Previsto em {selectedDriver.availability_city} ·{" "}
+                      {formatAvailabilityForecast(
+                        selectedDriver.availability_at,
+                      )}
+                    </p>
+                  )}
                 </div>
                 <span
                   className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold ${selectedDriver.is_online ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}
@@ -3792,7 +4503,7 @@ function LocationMapView({
                   />
                   {selectedDriver.is_online
                     ? getStatusLabel(selectedDriver.status)
-                    : "Offline"}
+                    : "Não disponível"}
                 </span>
               </div>
 
@@ -3917,56 +4628,58 @@ function LocationMapView({
             </div>
           )}
 
-          <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4">
-            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-              <div className="min-w-0">
-                <h3 className="font-bold text-orange-950">
-                  Rota para clientes
-                </h3>
-                <p className="mt-1 text-xs text-orange-800">
-                  Selecione um posto de coleta e um cliente final no mapa.
-                </p>
+          {showRoutePanel && (
+            <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4">
+              <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+                <div className="min-w-0">
+                  <h3 className="font-bold text-orange-950">
+                    Rota para clientes
+                  </h3>
+                  <p className="mt-1 text-xs text-orange-800">
+                    Selecione um posto de coleta e um cliente final no mapa.
+                  </p>
+                </div>
+                <span className="shrink-0 whitespace-nowrap rounded-full bg-white px-2.5 py-1 text-xs font-bold text-orange-800">
+                  {selectedClientIds.length} destino
+                  {selectedClientIds.length === 1 ? "" : "s"}
+                </span>
               </div>
-              <span className="shrink-0 whitespace-nowrap rounded-full bg-white px-2.5 py-1 text-xs font-bold text-orange-800">
-                {selectedClientIds.length} destino
-                {selectedClientIds.length === 1 ? "" : "s"}
-              </span>
+              <div className="mt-3 space-y-2">
+                {clients
+                  .filter((client) => selectedClientIds.includes(client.id))
+                  .map((client) => (
+                    <button
+                      key={client.id}
+                      type="button"
+                      onClick={() => onToggleClient(client.id)}
+                      className="flex w-full items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-xs font-semibold text-slate-700"
+                    >
+                      <span>{client.name}</span>
+                      <span className="text-orange-600">Remover</span>
+                    </button>
+                  ))}
+              </div>
+              <button
+                type="button"
+                onClick={onCalculateRoute}
+                disabled={routeLoading || selectedClientIds.length !== 2}
+                className="mt-3 w-full rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {routeLoading ? "Calculando rota..." : "Calcular rota"}
+              </button>
+              {routeSummary && (
+                <p className="mt-3 text-xs font-semibold text-orange-900">
+                  {formatRouteDistance(routeSummary.distance)} ·{" "}
+                  {formatRouteDuration(routeSummary.duration)}
+                </p>
+              )}
+              {routeError && (
+                <p className="mt-3 text-xs font-semibold text-rose-700">
+                  {routeError}
+                </p>
+              )}
             </div>
-            <div className="mt-3 space-y-2">
-              {clients
-                .filter((client) => selectedClientIds.includes(client.id))
-                .map((client) => (
-                  <button
-                    key={client.id}
-                    type="button"
-                    onClick={() => onToggleClient(client.id)}
-                    className="flex w-full items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-xs font-semibold text-slate-700"
-                  >
-                    <span>{client.name}</span>
-                    <span className="text-orange-600">Remover</span>
-                  </button>
-                ))}
-            </div>
-            <button
-              type="button"
-              onClick={onCalculateRoute}
-              disabled={routeLoading || selectedClientIds.length !== 2}
-              className="mt-3 w-full rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {routeLoading ? "Calculando rota..." : "Calcular rota"}
-            </button>
-            {routeSummary && (
-              <p className="mt-3 text-xs font-semibold text-orange-900">
-                {formatRouteDistance(routeSummary.distance)} ·{" "}
-                {formatRouteDuration(routeSummary.duration)}
-              </p>
-            )}
-            {routeError && (
-              <p className="mt-3 text-xs font-semibold text-rose-700">
-                {routeError}
-              </p>
-            )}
-          </div>
+          )}
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <h3 className="mb-3 text-sm font-semibold uppercase tracking-[0.12em] text-slate-400">
@@ -4087,8 +4800,8 @@ function MapViewport({
 
 function statusLabel(status: DemoDriver["status"]): string {
   const labels: Record<DemoDriver["status"], string> = {
-    offline: "Offline",
-    available: "Disponível",
+    offline: "Não disponível",
+    available: "Estou disponível",
     awaiting_loading: "Aguardando carregamento",
     awaiting_documents: "Aguardando documentação",
     in_transit: "Em trânsito",
@@ -4100,6 +4813,31 @@ function statusLabel(status: DemoDriver["status"]): string {
 
 function formatAvailabilityTime(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleTimeString("pt-BR") : "agora";
+}
+
+function formatAvailabilityForecast(value: string | null | undefined): string {
+  if (!value) return "Data/hora não informada";
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return "Data/hora não informada";
+  const today = new Date();
+  const dateOnly = new Date(
+    timestamp.getFullYear(),
+    timestamp.getMonth(),
+    timestamp.getDate(),
+  ).getTime();
+  const todayOnly = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  ).getTime();
+  const dayDifference = Math.round((dateOnly - todayOnly) / 86_400_000);
+  const dayLabel =
+    dayDifference === 0
+      ? "Hoje"
+      : dayDifference === 1
+        ? "Amanhã"
+        : timestamp.toLocaleDateString("pt-BR");
+  return `${dayLabel} às ${timestamp.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function whatsappHref(

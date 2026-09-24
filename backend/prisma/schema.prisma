@@ -77,6 +77,8 @@ model Driver {
   notes            String?
   employmentType   String    @default("autonomous")
   availabilitySince DateTime?
+  availabilityCity String?
+  availabilityAt DateTime?
   rating           Float     @default(0)
   totalTrips       Int       @default(0)
   createdAt        DateTime  @default(now())
@@ -114,9 +116,23 @@ model OperationalLocation {
 
   collectionNegotiations FreightNegotiation[] @relation("CollectionNegotiations")
   customerNegotiations   FreightNegotiation[] @relation("CustomerNegotiations")
+  companyAccesses        OperationalLocationCompanyAccess[]
 
   @@index([kind, active])
   @@index([city, state])
+}
+
+model OperationalLocationCompanyAccess {
+  id         String   @id @default(cuid())
+  locationId String
+  companyId  String
+  createdAt  DateTime @default(now())
+
+  location OperationalLocation @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  company  TransportCompany    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, companyId])
+  @@index([companyId])
 }
 
 model FreightNegotiation {
@@ -226,6 +242,7 @@ model TransportCompany {
   driverLinks DriverCarrierLink[]
   walletEntries DriverWalletEntry[]
   documents HomologationDocument[]
+  locationAccesses OperationalLocationCompanyAccess[]
 
   @@index([status])
 }

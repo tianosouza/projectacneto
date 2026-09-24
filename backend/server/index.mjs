@@ -212,6 +212,8 @@ const publicDriver = (driver) => ({
   notes: driver.notes,
   employment_type: driver.employmentType,
   availability_since: driver.availabilitySince?.toISOString() || null,
+  availability_city: driver.availabilityCity,
+  availability_at: driver.availabilityAt?.toISOString() || null,
   rating: driver.rating,
   total_trips: driver.totalTrips,
   created_at: driver.createdAt.toISOString(),
@@ -231,6 +233,7 @@ const publicOperationalLocation = (location) => ({
   active: location.active,
   created_at: location.createdAt.toISOString(),
   updated_at: location.updatedAt.toISOString(),
+  company_ids: location.companyAccesses?.map((access) => access.companyId) ?? [],
 });
 
 const publicNegotiation = (negotiation) => ({
@@ -769,10 +772,15 @@ app.patch("/api/drivers/me/location", auth, async (request, response) => {
 
 app.patch("/api/drivers/me/status", auth, async (request, response) => {
   if (!request.user.driver) return response.status(404).json({ error: "Motorista ainda não cadastrado" });
-  const { isOnline, status, notes } = request.body || {};
+  const { isOnline, status, notes, availabilityCity, availabilityAt } = request.body || {};
   const validStatuses = ["offline", "available", "awaiting_loading", "awaiting_documents", "in_transit", "at_collection", "awaiting_unloading", "driver_completed", "in_negotiation", "on_trip"];
   if (typeof isOnline !== "boolean" || !validStatuses.includes(status)) return response.status(400).json({ error: "Status inválido" });
-  const driver = await prisma.driver.update({ where: { id: request.user.driver.id }, data: { isOnline, status, notes, lastSeen: new Date(), availabilitySince: isOnline ? new Date() : request.user.driver.availabilitySince } });
+  const normalizedAvailabilityCity = typeof availabilityCity === "string" ? availabilityCity.trim() : "";
+  const parsedAvailabilityAt = typeof availabilityAt === "string" ? new Date(availabilityAt) : null;
+  if (isOnline && (!normalizedAvailabilityCity || !parsedAvailabilityAt || !Number.isFinite(parsedAvailabilityAt.getTime()))) {
+    return response.status(400).json({ error: "Informe a cidade, data e hora previstas para ficar disponível" });
+  }
+  const driver = await prisma.driver.update({ where: { id: request.user.driver.id }, data: { isOnline, status, notes, lastSeen: new Date(), availabilitySince: isOnline ? new Date() : request.user.driver.availabilitySince, availabilityCity: isOnline ? normalizedAvailabilityCity : null, availabilityAt: isOnline ? parsedAvailabilityAt : null } });
   broadcast("driver-status");
   response.json({ driver: publicDriver(driver) });
 });
@@ -1125,17 +1133,26 @@ const locationPayload = (body = {}) => {
   return data;
 };
 
-app.get("/api/operations/locations", auth, requireOperations, async (_request, response) => {
-  const locations = await prisma.operationalLocation.findMany({ where: { active: true }, orderBy: [{ kind: "asc" }, { name: "asc" }] });
-  const companies = request.user.profile?.role === "admin"
-    ? await prisma.transportCompany.findMany({ include: { vehicles: true }, orderBy: { legalName: "asc" } })
+app.get("/api/operations/locations", auth, requireOperations, async (request, response) => {
+  const locations = await prisma.operationalLocation.findMany({ where: { active: true }, include: { companyAccesses: true }, orderBy: [{ kind: "asc" }, { name: "asc" }] });
+  const companies = ["admin", "operator"].includes(request.user.profile?.role)
+    ? await prisma.transportCompany.findMany({ orderBy: { legalName: "asc" } })
     : [];
   response.json({ locations: locations.map(publicOperationalLocation) });
 });
 
 app.post("/api/operations/locations", auth, requireOperations, async (request, response) => {
   try {
-    const location = await prisma.operationalLocation.create({ data: locationPayload(request.body) });
+    const companyIds = Array.isArray(request.body?.companyIds)
+      ? [...new Set(request.body.companyIds.filter((id) => typeof id === "string" && id.trim()).map((id) => id.trim()))]
+      : [];
+    const location = await prisma.$transaction(async (transaction) => {
+      const createdLocation = await transaction.operationalLocation.create({ data: locationPayload(request.body) });
+      if (companyIds.length) {
+        await transaction.operationalLocationCompanyAccess.createMany({ data: companyIds.map((companyId) => ({ locationId: createdLocation.id, companyId })) });
+      }
+      return transaction.operationalLocation.findUnique({ where: { id: createdLocation.id }, include: { companyAccesses: true } });
+    });
     broadcast("operational-location-created");
     response.status(201).json({ location: publicOperationalLocation(location) });
   } catch (error) {
@@ -1145,7 +1162,17 @@ app.post("/api/operations/locations", auth, requireOperations, async (request, r
 
 app.patch("/api/operations/locations/:locationId", auth, requireOperations, async (request, response) => {
   try {
-    const location = await prisma.operationalLocation.update({ where: { id: request.params.locationId }, data: locationPayload(request.body) });
+    const companyIds = Array.isArray(request.body?.companyIds)
+      ? [...new Set(request.body.companyIds.filter((id) => typeof id === "string" && id.trim()).map((id) => id.trim()))]
+      : [];
+    const location = await prisma.$transaction(async (transaction) => {
+      const updatedLocation = await transaction.operationalLocation.update({ where: { id: request.params.locationId }, data: locationPayload(request.body) });
+      await transaction.operationalLocationCompanyAccess.deleteMany({ where: { locationId: updatedLocation.id } });
+      if (companyIds.length) {
+        await transaction.operationalLocationCompanyAccess.createMany({ data: companyIds.map((companyId) => ({ locationId: updatedLocation.id, companyId })) });
+      }
+      return transaction.operationalLocation.findUnique({ where: { id: updatedLocation.id }, include: { companyAccesses: true } });
+    });
     broadcast("operational-location-updated");
     response.json({ location: publicOperationalLocation(location) });
   } catch (error) {
@@ -1196,8 +1223,8 @@ app.get("/api/operations/directory", auth, requireOperations, async (request, re
       orderBy: { fullName: "asc" },
     })
     : [];
-  const locations = await prisma.operationalLocation.findMany({ where: { active: true }, orderBy: [{ kind: "asc" }, { name: "asc" }] });
-  const companies = request.user.profile?.role === "admin"
+  const locations = await prisma.operationalLocation.findMany({ where: { active: true }, include: { companyAccesses: true }, orderBy: [{ kind: "asc" }, { name: "asc" }] });
+  const companies = ["admin", "operator"].includes(request.user.profile?.role)
     ? await prisma.transportCompany.findMany({ include: { vehicles: true }, orderBy: { legalName: "asc" } })
     : [];
 
@@ -1243,15 +1270,47 @@ app.get("/api/carrier/registrations", auth, requireCarrier, async (request, resp
   response.json({ drivers: drivers.map(publicDriver), vehicles: vehicles.map((vehicle) => ({ id: vehicle.id, type: vehicle.type, plate: vehicle.plate, capacity: vehicle.capacity, products: vehicle.products.filter((product) => product.enabled).map((product) => product.product), status: vehicle.homologationStatus, current_driver: vehicle.driverAssignments[0]?.driver ? { id: vehicle.driverAssignments[0].driver.id, full_name: vehicle.driverAssignments[0].driver.fullName } : null })) });
 });
 
+app.get("/api/carrier/map", auth, requireCarrier, async (request, response) => {
+  const companyId = request.user.profile.companyId;
+  const activeSince = new Date(Date.now() - 2 * 60 * 1000);
+  const [company, drivers, locations] = await Promise.all([
+    prisma.transportCompany.findUnique({ where: { id: companyId } }),
+    prisma.driver.findMany({
+      where: { isOnline: true, lastSeen: { gte: activeSince }, carrierLinks: { some: { companyId, endedAt: null } } },
+      include: { vehicleAssignments: { where: { endedAt: null }, include: { vehicle: { include: { company: true, products: true } } }, orderBy: { startedAt: "desc" }, take: 1 }, carrierLinks: { where: { endedAt: null }, include: { company: true }, take: 1 } },
+      orderBy: { availabilitySince: "asc" },
+    }),
+    prisma.operationalLocation.findMany({ where: { active: true, companyAccesses: { some: { companyId } } }, include: { companyAccesses: true }, orderBy: [{ kind: "asc" }, { name: "asc" }] }),
+  ]);
+  response.json({ drivers: drivers.map((driver) => ({ ...publicDriver(driver), carrier: publicCompany(driver.carrierLinks?.[0]?.company ?? company) })), locations: locations.map(publicOperationalLocation) });
+});
+
 app.post("/api/carrier/drivers", auth, requireCarrier, async (request, response) => {
   const fullName = typeof request.body?.fullName === "string" ? request.body.fullName.trim() : "";
   const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
   const phone = typeof request.body?.phone === "string" ? request.body.phone.trim() : "";
   const password = typeof request.body?.password === "string" ? request.body.password : "";
-  if (!fullName || !email || !phone || password.length < 6) return response.status(400).json({ error: "Nome, e-mail, telefone e senha válida são obrigatórios" });
+  const cpf = typeof request.body?.cpf === "string" ? request.body.cpf.trim() : "";
+  const cnh = typeof request.body?.cnh === "string" ? request.body.cnh.trim() : "";
+  const cnhCategory = typeof request.body?.cnhCategory === "string" ? request.body.cnhCategory.trim() : "";
+  const cnhExpiresAt = typeof request.body?.cnhExpiresAt === "string" ? request.body.cnhExpiresAt.trim() : "";
+  const city = typeof request.body?.city === "string" ? request.body.city.trim() : "";
+  const state = typeof request.body?.state === "string" ? request.body.state.trim() : "";
+  const vehicleModel = typeof request.body?.vehicleModel === "string" ? request.body.vehicleModel.trim() : "";
+  const vehicleYear = typeof request.body?.vehicleYear === "string" ? request.body.vehicleYear.trim() : "";
+  const plate = typeof request.body?.plate === "string" ? request.body.plate.trim().toUpperCase() : "";
+  const capacity = typeof request.body?.capacity === "string" ? request.body.capacity.trim() : "";
+  const compartments = typeof request.body?.compartments === "string" ? request.body.compartments.trim() : "";
+  const locationSharingAuthorized = request.body?.locationSharingAuthorized === true;
+  if (!fullName || !email || !phone || password.length < 6 || [cpf, cnh, cnhCategory, cnhExpiresAt, city, state, vehicleModel, vehicleYear, plate, capacity, compartments].some((value) => !value)) return response.status(400).json({ error: "Preencha todos os campos obrigatórios do motorista" });
   try {
     const passwordHash = await hashPassword(password);
-    const user = await prisma.user.create({ data: { fullName, email, phone, passwordHash, profile: { create: { fullName, role: "driver", requestedRole: "driver", companyId: request.user.profile.companyId, approved: false, registrationNotes: "Cadastro criado pela transportadora" } } } });
+    const user = await prisma.$transaction(async (transaction) => {
+      const createdUser = await transaction.user.create({ data: { fullName, email, phone, passwordHash, profile: { create: { fullName, role: "driver", requestedRole: "driver", companyId: request.user.profile.companyId, approved: false, registrationNotes: "Cadastro criado pela transportadora" } }, driver: { create: { fullName, email, phone, cpf, cnh, cnhCategory, cnhExpiresAt: new Date(cnhExpiresAt), city, state, vehicleModel, vehicleYear: Number(vehicleYear), plate, capacity, compartments, locationSharingAuthorized, employmentType: "carrier", homologationStatus: "in_analysis" } } } });
+      const driver = await transaction.driver.findUnique({ where: { userId: createdUser.id } });
+      await transaction.driverCarrierLink.create({ data: { driverId: driver.id, companyId: request.user.profile.companyId } });
+      return createdUser;
+    });
     broadcast("registration-created");
     response.status(202).json({ pending: true, user: { id: user.id, full_name: fullName, email, phone } });
   } catch (error) {

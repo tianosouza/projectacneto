@@ -169,7 +169,13 @@ export function AuthScreen() {
       <ConfirmationModal
         open={registrationSent}
         title="Cadastro enviado"
-        message="Seu cadastro foi enviado com sucesso. Aguarde a aprovação do administrador."
+        message={
+          requestedRole === "client"
+            ? `Cliente cadastrado e em análise. Aguarde a aprovação do administrador. Nome: ${fullName || "Não informado"}. E-mail: ${email || "Não informado"}. Telefone: ${phone || "Não informado"}. Qual seu interesse?: ${registrationNotes || "Não informado"}.`
+            : requestedRole === "driver"
+              ? "Cadastro de motorista enviado. O motorista está em análise; aguarde a aprovação do administrador."
+              : "Seu cadastro foi enviado com sucesso. Aguarde a aprovação do administrador."
+        }
         actionLabel="Entendi"
         onClose={() => window.location.reload()}
       />
@@ -191,13 +197,13 @@ export function AuthScreen() {
             <span className="text-[#f3d32e]">Next Driver</span>
           </h1>
           <p className="mt-5 text-lg leading-relaxed text-blue-100/80">
-            Fique online, seja encontrado pelos operadores e negocie fretes em
-            tempo real, direto do seu celular.
+            Fique disponível, seja encontrado pelos operadores e negocie fretes
+            em tempo real, direto do seu celular.
           </p>
           <div className="mt-10 flex items-center gap-6">
             <div className="flex items-center gap-2.5 text-sm text-blue-100/80">
               <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-400" />{" "}
-              Online agora
+              Disponível agora
             </div>
           </div>
         </div>
@@ -453,6 +459,57 @@ export function AuthScreen() {
                   required
                 />
               </div>
+              {requestedRole === "driver" && (
+                <div className="grid gap-2 rounded-xl border border-dashed border-blue-200 bg-white/70 p-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1 text-xs font-semibold text-blue-900">
+                    Vínculo profissional *
+                    <select
+                      value={driver.employmentType}
+                      onChange={(event) =>
+                        setDriver((current) => ({
+                          ...current,
+                          employmentType: event.target.value as
+                            | "autonomous"
+                            | "carrier",
+                          carrierId:
+                            event.target.value === "autonomous"
+                              ? ""
+                              : current.carrierId,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    >
+                      <option value="autonomous">Autônomo</option>
+                      <option value="carrier">
+                        Motorista de transportadora
+                      </option>
+                    </select>
+                  </label>
+                  {driver.employmentType === "carrier" && (
+                    <label className="flex flex-col gap-1 text-xs font-semibold text-blue-900">
+                      Transportadora *
+                      <select
+                        value={driver.carrierId}
+                        onChange={(event) =>
+                          setDriver((current) => ({
+                            ...current,
+                            carrierId: event.target.value,
+                          }))
+                        }
+                        required
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      >
+                        <option value="">Selecione a transportadora</option>
+                        {transportCompanies.map((company) => (
+                          <option key={company.id} value={company.id}>
+                            {company.name} · {company.cnpj}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </div>
+              )}
               {requestedRole === "driver" ? (
                 <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
                   <p className="text-sm font-semibold text-blue-900">
@@ -538,55 +595,6 @@ export function AuthScreen() {
                     />
                   </div>
                   <div className="rounded-xl border border-dashed border-blue-200 bg-white/70 p-3">
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <label className="flex flex-col gap-1 text-xs font-semibold text-blue-900">
-                        Vínculo profissional *
-                        <select
-                          value={driver.employmentType}
-                          onChange={(event) =>
-                            setDriver((current) => ({
-                              ...current,
-                              employmentType: event.target.value as
-                                | "autonomous"
-                                | "carrier",
-                              carrierId:
-                                event.target.value === "autonomous"
-                                  ? ""
-                                  : current.carrierId,
-                            }))
-                          }
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                        >
-                          <option value="autonomous">Autônomo</option>
-                          <option value="carrier">
-                            Motorista de transportadora
-                          </option>
-                        </select>
-                      </label>
-                      {driver.employmentType === "carrier" && (
-                        <label className="flex flex-col gap-1 text-xs font-semibold text-blue-900">
-                          Transportadora *
-                          <select
-                            value={driver.carrierId}
-                            onChange={(event) =>
-                              setDriver((current) => ({
-                                ...current,
-                                carrierId: event.target.value,
-                              }))
-                            }
-                            required
-                            className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                          >
-                            <option value="">Selecione a transportadora</option>
-                            {transportCompanies.map((company) => (
-                              <option key={company.id} value={company.id}>
-                                {company.name} · {company.cnpj}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      )}
-                    </div>
                     <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-blue-800">
                       <Truck size={15} /> Veículo próprio (obrigatório)
                     </p>
@@ -729,7 +737,11 @@ export function AuthScreen() {
               <textarea
                 value={registrationNotes}
                 onChange={(event) => setRegistrationNotes(event.target.value)}
-                placeholder="Observações do cadastro (opcional)"
+                placeholder={
+                  requestedRole === "client"
+                    ? "Qual seu interesse? (opcional)"
+                    : "Observações do cadastro (opcional)"
+                }
                 rows={2}
                 maxLength={1000}
                 className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"

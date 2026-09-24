@@ -28,7 +28,7 @@ export function DirectorySearch({
           <p className="text-xs text-slate-500">
             {role === "admin"
               ? "Pesquise operadores e motoristas pelo nome."
-              : "Pesquise motoristas online pelo nome."}
+              : "Pesquise motoristas disponíveis pelo nome."}
           </p>
         </div>
       </div>
@@ -59,7 +59,7 @@ export function DirectorySearch({
             <DirectoryRow
               key={`driver-${driver.id}`}
               title={driver.full_name}
-              detail={`${driver.city ?? "Localização não informada"} · ${isDriverCurrentlyOnline(driver) ? "Motorista online" : "Motorista offline"}`}
+              detail={`${driver.city ?? "Localização não informada"} · ${isDriverCurrentlyOnline(driver) ? "Motorista disponível" : "Motorista não disponível"}`}
               onEdit={() => onEditDriver(driver)}
             />
           ))}
