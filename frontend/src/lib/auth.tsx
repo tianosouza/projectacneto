@@ -92,7 +92,7 @@ type AuthContextValue = {
     password: string,
     fullName: string,
     phone: string,
-    requestedRole: "driver" | "carrier",
+    requestedRole: "driver" | "carrier" | "client",
     registrationNotes: string,
     company?: {
       legalName: string;
@@ -208,7 +208,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     password: string,
     fullName: string,
     phone: string,
-    requestedRole: "driver" | "carrier",
+    requestedRole: "driver" | "carrier" | "client",
     registrationNotes: string,
     company?: {
       legalName: string;

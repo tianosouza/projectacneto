@@ -604,7 +604,7 @@ function RoleDashboard({
     PendingUser[]
   >([]);
   const [approvalRoles, setApprovalRoles] = useState<
-    Record<string, "driver" | "carrier" | "operator" | "admin">
+    Record<string, "driver" | "carrier" | "client" | "operator" | "admin">
   >({});
   const [approvalDriverFields, setApprovalDriverFields] = useState<
     Record<string, ApprovalDriverFields>
@@ -3094,11 +3094,14 @@ export function RegistrationRequestsPanel({
   onReopen,
 }: {
   requests: PendingUser[];
-  approvalRoles: Record<string, "driver" | "carrier" | "operator" | "admin">;
+  approvalRoles: Record<
+    string,
+    "driver" | "carrier" | "client" | "operator" | "admin"
+  >;
   approvalDriverFields: Record<string, ApprovalDriverFields>;
   onRoleChange: (
     userId: string,
-    value: "driver" | "carrier" | "operator" | "admin",
+    value: "driver" | "carrier" | "client" | "operator" | "admin",
   ) => void;
   onDriverFieldChange: (
     userId: string,

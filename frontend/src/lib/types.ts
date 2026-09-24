@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "operator" | "driver" | "carrier";
+export type UserRole = "admin" | "operator" | "driver" | "carrier" | "client";
 
 export type Profile = {
   id: string;

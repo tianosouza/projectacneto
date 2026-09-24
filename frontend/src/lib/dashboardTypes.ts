@@ -26,7 +26,7 @@ export type PendingUser = {
   email: string;
   phone: string | null;
   role: string;
-  requested_role: "driver" | "carrier" | "operator";
+  requested_role: "driver" | "carrier" | "client" | "operator";
   registration_notes: string | null;
   approval_closed?: boolean;
   company_id?: string | null;

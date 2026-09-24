@@ -18,7 +18,10 @@ export function RegistrationRequestsPanel({
   onReopen,
 }: {
   requests: PendingUser[];
-  approvalRoles: Record<string, "driver" | "carrier" | "operator" | "admin">;
+  approvalRoles: Record<
+    string,
+    "driver" | "carrier" | "client" | "operator" | "admin"
+  >;
   approvalDriverFields: Record<string, ApprovalDriverFields>;
   initialPasswords: Record<string, string>;
   onInitialPasswordChange: (userId: string, value: string) => void;
@@ -26,7 +29,7 @@ export function RegistrationRequestsPanel({
   canManageStatus: boolean;
   onRoleChange: (
     userId: string,
-    value: "driver" | "carrier" | "operator" | "admin",
+    value: "driver" | "carrier" | "client" | "operator" | "admin",
   ) => void;
   onDriverFieldChange: (
     userId: string,
@@ -92,7 +95,9 @@ export function RegistrationRequestsPanel({
                         ? "operador"
                         : request.requested_role === "carrier"
                           ? "transportadora"
-                          : "motorista"}{" "}
+                          : request.requested_role === "client"
+                            ? "cliente"
+                            : "motorista"}{" "}
                       · {new Date(request.created_at).toLocaleString("pt-BR")}
                     </p>
                     {request.registration_notes && (
@@ -107,10 +112,12 @@ export function RegistrationRequestsPanel({
                     {request.approval_closed ? "Fechada" : "Em análise"}
                   </span>
                 </div>
-                {selectedRole === "carrier" && (
+                {(selectedRole === "carrier" || selectedRole === "client") && (
                   <div className="grid gap-2 rounded-xl border border-blue-100 bg-blue-50/60 p-3 sm:grid-cols-2">
                     <p className="text-xs font-bold uppercase tracking-wide text-blue-900 sm:col-span-2">
-                      Dados da transportadora para conferência
+                      {selectedRole === "client"
+                        ? "Dados do cliente para conferência"
+                        : "Dados da transportadora para conferência"}
                     </p>
                     <ReadOnlyField
                       label="Sócio representante"
@@ -168,6 +175,7 @@ export function RegistrationRequestsPanel({
                               event.target.value as
                                 | "driver"
                                 | "carrier"
+                                | "client"
                                 | "operator"
                                 | "admin",
                             )
@@ -177,6 +185,7 @@ export function RegistrationRequestsPanel({
                         >
                           <option value="driver">Motorista</option>
                           <option value="carrier">Transportadora</option>
+                          <option value="client">Cliente</option>
                           <option value="operator">Operador</option>
                           <option value="admin">Administrador</option>
                         </select>

@@ -382,7 +382,7 @@ app.post("/api/auth/signup", async (request, response) => {
   const fullName = typeof request.body?.fullName === "string" ? request.body.fullName.trim() : "";
   const phone = typeof request.body?.phone === "string" ? request.body.phone.trim() : "";
   const password = typeof request.body?.password === "string" ? request.body.password : "";
-  const requestedRole = ["driver", "carrier"].includes(request.body?.requestedRole) ? request.body.requestedRole : "driver";
+  const requestedRole = ["driver", "carrier", "client"].includes(request.body?.requestedRole) ? request.body.requestedRole : "driver";
   const registrationNotes = typeof request.body?.registrationNotes === "string" ? request.body.registrationNotes.trim().slice(0, 1000) : null;
   const companyData = request.body?.company || {};
   const legalName = typeof companyData.legalName === "string" ? companyData.legalName.trim() : "";
@@ -395,7 +395,7 @@ app.post("/api/auth/signup", async (request, response) => {
     : "autonomous";
   const carrierId = typeof driverData.carrierId === "string" ? driverData.carrierId.trim() : "";
   if (!email || !fullName || !phone || password.length < 6) return response.status(400).json({ error: requestedRole === "carrier" ? "Nome do sócio representante, e-mail, telefone e senha válida são obrigatórios" : "Nome, e-mail, telefone e senha válida são obrigatórios" });
-  if (requestedRole === "carrier" && (!legalName || !cnpj || !address)) return response.status(400).json({ error: "Razão social, CNPJ e endereço são obrigatórios para transportadora" });
+  if (["carrier", "client"].includes(requestedRole) && (!legalName || !cnpj || !address)) return response.status(400).json({ error: requestedRole === "client" ? "Nome da empresa, CNPJ e endereço são obrigatórios para cliente" : "Razão social, CNPJ e endereço são obrigatórios para transportadora" });
   if (requestedRole === "driver" && [driverData.cpf, driverData.cnh, driverData.cnhCategory, driverData.cnhExpiresAt, driverData.city, driverData.state, driverData.vehicleModel, driverData.vehicleYear, driverData.plate, driverData.capacity, driverData.compartments].some((value) => value === undefined || value === null || String(value).trim() === "")) return response.status(400).json({ error: "CPF, CNH, categoria, validade, cidade, UF e veículo completo são obrigatórios para motorista" });
   if (requestedRole === "driver" && employmentType === "carrier" && !carrierId) return response.status(400).json({ error: "Selecione a transportadora do motorista" });
   try {
@@ -410,7 +410,7 @@ app.post("/api/auth/signup", async (request, response) => {
         const driver = await transaction.driver.findUnique({ where: { userId: user.id } });
         await transaction.driverCarrierLink.create({ data: { driverId: driver.id, companyId: carrier.id } });
       }
-      if (requestedRole === "carrier") {
+      if (["carrier", "client"].includes(requestedRole)) {
         const company = await transaction.transportCompany.create({ data: { userId: user.id, legalName, cnpj, stateRegistration, phone, address, email, status: "in_analysis" } });
         await transaction.profile.update({ where: { userId: user.id }, data: { companyId: company.id } });
       }
@@ -595,7 +595,7 @@ app.get("/api/admin/pending-users", auth, requireOperations, async (_request, re
     where: {
       approved: false,
       approvalClosed: false,
-      ...(isOperator ? { requestedRole: { in: ["driver", "carrier"] } } : {}),
+      ...(isOperator ? { requestedRole: { in: ["driver", "carrier", "client"] } } : {}),
     },
     include: { user: { include: { driver: { include: { carrierLinks: { where: { endedAt: null }, include: { company: true }, take: 1 } } } } }, company: true },
     orderBy: { createdAt: "asc" },
@@ -689,10 +689,10 @@ app.delete("/api/admin/users/:userId/remove", auth, requireAdmin, async (request
 });
 
 app.patch("/api/admin/users/:userId/approve", auth, requireOperations, async (request, response) => {
-  const assignedRole = ["driver", "carrier", "operator", "admin"].includes(request.body?.role) ? request.body.role : null;
+  const assignedRole = ["driver", "carrier", "client", "operator", "admin"].includes(request.body?.role) ? request.body.role : null;
   if (!assignedRole) return response.status(400).json({ error: "Informe um perfil válido" });
-  if (request.user.profile?.role === "operator" && !["driver", "carrier"].includes(assignedRole)) {
-    return response.status(403).json({ error: "Operadores só podem aprovar motoristas e transportadoras" });
+  if (request.user.profile?.role === "operator" && !["driver", "carrier", "client"].includes(assignedRole)) {
+    return response.status(403).json({ error: "Operadores só podem aprovar motoristas, transportadoras e clientes" });
   }
   const user = await prisma.user.findUnique({ where: { id: request.params.userId }, include: { profile: true, driver: true, transportCompany: true } });
   if (!user?.profile) return response.status(404).json({ error: "Cadastro não encontrado" });
@@ -700,8 +700,8 @@ app.patch("/api/admin/users/:userId/approve", auth, requireOperations, async (re
   if (!user.fullName?.trim() || !user.email?.trim() || !user.phone?.trim()) {
     return response.status(400).json({ error: "Nome, e-mail e telefone do cadastro são obrigatórios" });
   }
-  if (assignedRole === "carrier" && (!user.transportCompany?.legalName?.trim() || !user.transportCompany.cnpj?.trim() || !user.transportCompany.phone?.trim() || !user.transportCompany.address?.trim() || !user.transportCompany.email?.trim())) {
-    return response.status(400).json({ error: "Confira razão social, CNPJ, telefone, endereço e e-mail da transportadora antes de aprovar" });
+  if (["carrier", "client"].includes(assignedRole) && (!user.transportCompany?.legalName?.trim() || !user.transportCompany.cnpj?.trim() || !user.transportCompany.phone?.trim() || !user.transportCompany.address?.trim() || !user.transportCompany.email?.trim())) {
+    return response.status(400).json({ error: assignedRole === "client" ? "Confira nome da empresa, CNPJ, telefone, endereço e e-mail do cliente antes de aprovar" : "Confira razão social, CNPJ, telefone, endereço e e-mail da transportadora antes de aprovar" });
   }
   const driverData = request.body?.driver || {};
   const requiredDriverFields = user.profile.companyId
@@ -719,7 +719,7 @@ app.patch("/api/admin/users/:userId/approve", auth, requireOperations, async (re
     : null;
   const profile = await prisma.$transaction(async (transaction) => {
     const updatedProfile = await transaction.profile.update({ where: { userId: request.params.userId }, data: { approved: true, role: assignedRole, mustChangePassword: ["operator", "admin"].includes(assignedRole) } });
-    if (assignedRole === "carrier" && user.transportCompany) {
+    if (["carrier", "client"].includes(assignedRole) && user.transportCompany) {
       await transaction.transportCompany.update({ where: { id: user.transportCompany.id }, data: { status: "active" } });
     }
     if (initialPasswordHash) await transaction.user.update({ where: { id: user.id }, data: { passwordHash: initialPasswordHash } });
