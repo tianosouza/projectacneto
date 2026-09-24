@@ -34,6 +34,24 @@ const operationalTestLocations = [
   ["final_customer", "Cliente teste Brasilia", "Brasilia", "DF", -15.8400, -47.9000],
 ];
 
+const testDrivers = [
+  ["Cristiano Teste Fortaleza", "motorista.teste.fortaleza@acneto.com", "Fortaleza", "CE", -3.7319, -38.5267, 0],
+  ["Marcos Teste Salvador", "motorista.teste.salvador@acneto.com", "Salvador", "BA", -12.9777, -38.5016, 1],
+  ["Rafael Teste Recife", "motorista.teste.recife@acneto.com", "Recife", "PE", -8.0476, -34.8770, 2],
+  ["Joao Teste Sao Paulo", "motorista.teste.saopaulo@acneto.com", "Sao Paulo", "SP", -23.5505, -46.6333, 0],
+  ["Andre Teste Belo Horizonte", "motorista.teste.bh@acneto.com", "Belo Horizonte", "MG", -19.9167, -43.9345, 1],
+  ["Lucas Teste Curitiba", "motorista.teste.curitiba@acneto.com", "Curitiba", "PR", -25.4284, -49.2733, 2],
+  ["Diego Teste Goiania", "motorista.teste.goiania@acneto.com", "Goiania", "GO", -16.6869, -49.2648, 0],
+  ["Bruno Teste Porto Alegre", "motorista.teste.portoalegre@acneto.com", "Porto Alegre", "RS", -30.0346, -51.2177, 1],
+];
+
+const availabilityDate = (daysFromToday) => {
+  const date = new Date();
+  date.setHours(8 + daysFromToday, 0, 0, 0);
+  date.setDate(date.getDate() + daysFromToday);
+  return date;
+};
+
 async function main() {
   const email = (process.env.ADMIN_EMAIL || "admin@acnetotransportes.com").trim().toLowerCase();
   const fullName = (process.env.ADMIN_NAME || "Administrador").trim();
@@ -68,6 +86,64 @@ async function main() {
     create: { userId: user.id, fullName, role: "admin", approved: true },
   });
 
+  const testPasswordHash = await hashPassword("teste123456789");
+  for (const [fullName, driverEmail, city, state, latitude, longitude, daysFromToday] of testDrivers) {
+    const driverUser = await prisma.user.upsert({
+      where: { email: driverEmail },
+      update: { fullName, passwordHash: testPasswordHash },
+      create: { email: driverEmail, fullName, passwordHash: testPasswordHash },
+    });
+    await prisma.profile.upsert({
+      where: { userId: driverUser.id },
+      update: { fullName, role: "driver", requestedRole: "driver", approved: true },
+      create: { userId: driverUser.id, fullName, role: "driver", requestedRole: "driver", approved: true },
+    });
+    await prisma.driver.upsert({
+      where: { userId: driverUser.id },
+      update: {
+        fullName,
+        email: driverEmail,
+        vehicleModel: "Carreta tanque teste",
+        vehicleYear: 2025,
+        capacity: "30.000 L",
+        compartments: "5 compartimentos",
+        plate: `TST-${state}`,
+        city,
+        state,
+        latitude,
+        longitude,
+        isOnline: true,
+        status: "available",
+        lastSeen: new Date(),
+        availabilityCity: city,
+        availabilityAt: availabilityDate(daysFromToday),
+        availabilitySince: new Date(),
+        employmentType: "autonomous",
+      },
+      create: {
+        userId: driverUser.id,
+        fullName,
+        email: driverEmail,
+        vehicleModel: "Carreta tanque teste",
+        vehicleYear: 2025,
+        capacity: "30.000 L",
+        compartments: "5 compartimentos",
+        plate: `TST-${state}`,
+        city,
+        state,
+        latitude,
+        longitude,
+        isOnline: true,
+        status: "available",
+        lastSeen: new Date(),
+        availabilityCity: city,
+        availabilityAt: availabilityDate(daysFromToday),
+        availabilitySince: new Date(),
+        employmentType: "autonomous",
+      },
+    });
+  }
+
   for (const [kind, name, city, state, latitude, longitude] of operationalTestLocations) {
     await prisma.operationalLocation.upsert({
       where: { id: `seed-${kind}-${city.toLowerCase().replaceAll(" ", "-")}` },
@@ -89,6 +165,7 @@ async function main() {
   }
 
   console.log(`Pontos operacionais de teste disponíveis: ${operationalTestLocations.length}`);
+  console.log(`Motoristas online de teste disponíveis: ${testDrivers.length}`);
 
   console.log(`Administrador disponível para acesso: ${email}`);
 }

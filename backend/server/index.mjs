@@ -210,6 +210,8 @@ const publicDriver = (driver) => ({
   last_seen: driver.lastSeen?.toISOString() || null,
   status: driver.status,
   notes: driver.notes,
+  availability_city: driver.availabilityCity,
+  availability_at: driver.availabilityAt?.toISOString() || null,
   employment_type: driver.employmentType,
   availability_since: driver.availabilitySince?.toISOString() || null,
   rating: driver.rating,
@@ -564,13 +566,29 @@ app.patch("/api/admin/users/:userId/module", auth, requireSuperAdmin, async (req
   response.json({ module: moduleName, enabled: value, finance_enabled: updated.financeEnabled, negotiations_enabled: updated.negotiationsEnabled });
 });
 
+app.patch("/api/admin/users/:userId/password", auth, requireSuperAdmin, async (request, response) => {
+  const password = typeof request.body?.password === "string" ? request.body.password : "";
+  if (password.length < 8) return response.status(400).json({ error: "A senha deve ter no mínimo 8 caracteres" });
+
+  const user = await prisma.user.findUnique({ where: { id: request.params.userId }, include: { profile: true } });
+  if (!user?.profile) return response.status(404).json({ error: "Usuário não encontrado" });
+
+  const passwordHash = await hashPassword(password);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: user.id }, data: { passwordHash } }),
+    prisma.profile.update({ where: { userId: user.id }, data: { mustChangePassword: true } }),
+  ]);
+  broadcast("user-password-updated");
+  response.json({ updated: true });
+});
+
 app.get("/api/admin/module-users", auth, requireSuperAdmin, async (_request, response) => {
   const profiles = await prisma.profile.findMany({
-    where: { role: { in: ["operator", "admin"] }, isSuperAdmin: false },
+    where: { userId: { not: _request.user.id } },
     include: { user: true },
     orderBy: { fullName: "asc" },
   });
-  response.json({ users: profiles.map((profile) => ({ id: profile.userId, name: profile.fullName ?? profile.user.fullName ?? "Usuário", email: profile.user.email, role: profile.role, finance_enabled: profile.financeEnabled, negotiations_enabled: profile.negotiationsEnabled })) });
+  response.json({ users: profiles.map((profile) => ({ id: profile.userId, name: profile.fullName ?? profile.user.fullName ?? "Usuário", email: profile.user.email, role: profile.role, is_super_admin: profile.isSuperAdmin, finance_enabled: profile.financeEnabled, negotiations_enabled: profile.negotiationsEnabled })) });
 });
 
 app.get("/api/admin/pending-users", auth, requireOperations, async (_request, response) => {
@@ -756,7 +774,13 @@ app.patch("/api/drivers/me/status", auth, async (request, response) => {
   const { isOnline, status, notes } = request.body || {};
   const validStatuses = ["offline", "available", "awaiting_loading", "awaiting_documents", "in_transit", "at_collection", "awaiting_unloading", "driver_completed", "in_negotiation", "on_trip"];
   if (typeof isOnline !== "boolean" || !validStatuses.includes(status)) return response.status(400).json({ error: "Status inválido" });
-  const driver = await prisma.driver.update({ where: { id: request.user.driver.id }, data: { isOnline, status, notes, lastSeen: new Date(), availabilitySince: isOnline ? new Date() : request.user.driver.availabilitySince } });
+  const availabilityAt = typeof request.body?.availabilityAt === "string" && request.body.availabilityAt
+    ? new Date(request.body.availabilityAt)
+    : null;
+  if (isOnline && (!Number.isFinite(availabilityAt?.getTime()) || typeof request.body?.availabilityCity !== "string" || !request.body.availabilityCity.trim())) {
+    return response.status(400).json({ error: "Informe a cidade, a data e o horário previstos para ficar disponível" });
+  }
+  const driver = await prisma.driver.update({ where: { id: request.user.driver.id }, data: { isOnline, status, notes, lastSeen: new Date(), availabilityCity: isOnline ? request.body.availabilityCity.trim() : request.user.driver.availabilityCity, availabilityAt: isOnline ? availabilityAt : request.user.driver.availabilityAt, availabilitySince: isOnline ? new Date() : request.user.driver.availabilitySince } });
   broadcast("driver-status");
   response.json({ driver: publicDriver(driver) });
 });

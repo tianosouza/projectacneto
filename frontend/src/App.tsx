@@ -265,9 +265,9 @@ function CarrierDashboard({
       </header>
       <main className="mx-auto mt-6 max-w-6xl space-y-6">
         <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-          Você administra seus motoristas e veículos. Todo novo cadastro fica{" "}
-          <strong>em análise</strong> até aprovação de um operador ou
-          administrador.
+          Você administra seus motoristas e veículos. Todo novo cadastro de
+          motorista fica <strong>em análise</strong>. Aguarde a aprovação de um
+          operador ou administrador antes de vinculá-lo a um veículo.
         </div>
         {error && (
           <div className="rounded-xl bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
@@ -514,10 +514,17 @@ function RoleDashboard({
       name: string;
       email: string;
       role: string;
+      is_super_admin: boolean;
       finance_enabled: boolean;
       negotiations_enabled: boolean;
     }>
   >([]);
+  const [passwordResetValues, setPasswordResetValues] = useState<
+    Record<string, string>
+  >({});
+  const [passwordResettingUserId, setPasswordResettingUserId] = useState<
+    string | null
+  >(null);
   const [driverForm, setDriverForm] = useState({
     full_name: "",
     email: "",
@@ -748,6 +755,33 @@ function RoleDashboard({
             }
           : user,
       ),
+    );
+  };
+
+  const resetUserPassword = async (userId: string) => {
+    const password = passwordResetValues[userId] ?? "";
+    if (password.length < 8) {
+      showFormError("A nova senha deve ter no mínimo 8 caracteres.");
+      return;
+    }
+    setPasswordResettingUserId(userId);
+    const response = await apiFetch(`/api/admin/users/${userId}/password`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
+      },
+      body: JSON.stringify({ password }),
+    });
+    setPasswordResettingUserId(null);
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string };
+      showFormError(body.error ?? "Não foi possível alterar a senha.");
+      return;
+    }
+    setPasswordResetValues((current) => ({ ...current, [userId]: "" }));
+    setFormSuccess(
+      "Senha alterada. O usuário deverá trocá-la no próximo acesso.",
     );
   };
 
@@ -2497,10 +2531,7 @@ function RoleDashboard({
                         }
                         className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                       >
-                        <option value="autonomous">Autônomo</option>
-                        <option value="carrier">
-                          Motorista de transportadora
-                        </option>
+                        <option value="autonomous">Sim, sou autônomo</option>
                       </select>
                       {driverForm.employment_type === "carrier" && (
                         <select
@@ -2629,7 +2660,7 @@ function RoleDashboard({
                         <RegistryRow
                           key={driver.id}
                           title={driver.full_name}
-                          detail={`${driver.phone ?? "Sem telefone"} · ${driver.current_vehicle?.plate ?? (driver.plate || "Sem veículo")}`}
+                          detail={`${driver.phone ?? "Sem telefone"} · ${driver.current_vehicle?.plate ?? (driver.plate || "Sem veículo")} · ${driver.is_online ? `Online${driver.availability_city ? ` · ${driver.availability_city}${driver.availability_at ? ` até ${new Date(driver.availability_at).toLocaleString("pt-BR")}` : ""}` : ""}` : "Não disponível"}`}
                           status={driver.homologation_status ?? driver.status}
                           onEdit={() => editDriver(driver)}
                           onDelete={() => void removeDriver(driver)}
@@ -2876,39 +2907,75 @@ function RoleDashboard({
                       <p className="font-bold text-[#0b1d3a]">{user.name}</p>
                       <p className="text-sm text-slate-500">
                         {user.email} ·{" "}
-                        {user.role === "admin" ? "Administrador" : "Operador"}
+                        {user.is_super_admin
+                          ? "Superadministrador"
+                          : user.role === "admin"
+                            ? "Administrador"
+                            : user.role === "operator"
+                              ? "Operador"
+                              : user.role === "driver"
+                                ? "Motorista"
+                                : user.role === "carrier"
+                                  ? "Transportadora"
+                                  : user.role}
                       </p>
                     </div>
                     <div className="grid gap-2 sm:grid-cols-2">
+                      {(user.role === "operator" || user.role === "admin") && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void toggleModuleUser(
+                                user.id,
+                                "finance",
+                                user.finance_enabled,
+                              )
+                            }
+                            className={`rounded-xl px-3 py-2 text-xs font-bold ${user.finance_enabled ? "bg-emerald-600 text-white" : "border border-slate-200 text-slate-600"}`}
+                          >
+                            {user.finance_enabled
+                              ? "Financeiro liberado"
+                              : "Liberar Financeiro"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void toggleModuleUser(
+                                user.id,
+                                "negotiations",
+                                user.negotiations_enabled,
+                              )
+                            }
+                            className={`rounded-xl px-3 py-2 text-xs font-bold ${user.negotiations_enabled ? "bg-indigo-600 text-white" : "border border-slate-200 text-slate-600"}`}
+                          >
+                            {user.negotiations_enabled
+                              ? "Negociações liberadas"
+                              : "Liberar Negociações"}
+                          </button>
+                        </>
+                      )}
+                      <input
+                        type="password"
+                        value={passwordResetValues[user.id] ?? ""}
+                        onChange={(event) =>
+                          setPasswordResetValues((current) => ({
+                            ...current,
+                            [user.id]: event.target.value,
+                          }))
+                        }
+                        placeholder="Nova senha (mínimo 8)"
+                        className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
                       <button
                         type="button"
-                        onClick={() =>
-                          void toggleModuleUser(
-                            user.id,
-                            "finance",
-                            user.finance_enabled,
-                          )
-                        }
-                        className={`rounded-xl px-3 py-2 text-xs font-bold ${user.finance_enabled ? "bg-emerald-600 text-white" : "border border-slate-200 text-slate-600"}`}
+                        onClick={() => void resetUserPassword(user.id)}
+                        disabled={passwordResettingUserId === user.id}
+                        className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-bold text-white hover:bg-amber-600 disabled:cursor-wait disabled:opacity-60"
                       >
-                        {user.finance_enabled
-                          ? "Financeiro liberado"
-                          : "Liberar Financeiro"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void toggleModuleUser(
-                            user.id,
-                            "negotiations",
-                            user.negotiations_enabled,
-                          )
-                        }
-                        className={`rounded-xl px-3 py-2 text-xs font-bold ${user.negotiations_enabled ? "bg-indigo-600 text-white" : "border border-slate-200 text-slate-600"}`}
-                      >
-                        {user.negotiations_enabled
-                          ? "Negociações liberadas"
-                          : "Liberar Negociações"}
+                        {passwordResettingUserId === user.id
+                          ? "Alterando..."
+                          : "Alterar senha"}
                       </button>
                     </div>
                   </div>
@@ -3407,6 +3474,11 @@ function RegistryRow({
       <div className="min-w-0">
         <p className="truncate text-sm font-semibold text-[#0b1d3a]">{title}</p>
         <p className="truncate text-xs text-slate-500">{detail}</p>
+        {status === "in_analysis" && (
+          <p className="mt-1 text-xs font-semibold text-amber-700">
+            Motorista em análise. Aguarde a aprovação.
+          </p>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">
@@ -3484,6 +3556,7 @@ function LocationMapView({
 }) {
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [driverFocusVersion, setDriverFocusVersion] = useState(0);
+  const [availabilityDateFilter, setAvailabilityDateFilter] = useState("all");
 
   const selectDriver = (driverId: string) => {
     onSelectDriver(driverId);
@@ -3496,13 +3569,36 @@ function LocationMapView({
 
   const cities = [
     "Todas",
-    ...Array.from(new Set(drivers.map((driver) => driver.city))),
+    ...Array.from(
+      new Set(drivers.map((driver) => driver.availability_city ?? driver.city)),
+    ),
   ];
+  const filteredDrivers = drivers.filter((driver) => {
+    const driverCity = driver.availability_city ?? driver.city;
+    if (cityFilter !== "Todas" && driverCity !== cityFilter) return false;
+    if (availabilityDateFilter === "all") return true;
+    if (!driver.availability_at) return false;
+    const target = new Date();
+    target.setHours(0, 0, 0, 0);
+    const offset =
+      availabilityDateFilter === "today"
+        ? 0
+        : availabilityDateFilter === "tomorrow"
+          ? 1
+          : 2;
+    target.setDate(target.getDate() + offset);
+    const availability = new Date(driver.availability_at);
+    return (
+      availability.getFullYear() === target.getFullYear() &&
+      availability.getMonth() === target.getMonth() &&
+      availability.getDate() === target.getDate()
+    );
+  });
   const selectedDriver =
-    drivers.find((driver) => driver.id === selectedDriverId) ??
-    drivers[0] ??
+    filteredDrivers.find((driver) => driver.id === selectedDriverId) ??
+    filteredDrivers[0] ??
     null;
-  const locatedDrivers = drivers.filter(
+  const locatedDrivers = filteredDrivers.filter(
     (driver) =>
       Number.isFinite(driver.latitude) && Number.isFinite(driver.longitude),
   );
@@ -3584,6 +3680,17 @@ function LocationMapView({
                 {city}
               </option>
             ))}
+          </select>
+          <select
+            value={availabilityDateFilter}
+            onChange={(e) => setAvailabilityDateFilter(e.target.value)}
+            className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:w-auto"
+            aria-label="Filtrar por data prevista"
+          >
+            <option value="all">Todas as datas</option>
+            <option value="today">Hoje</option>
+            <option value="tomorrow">Amanhã</option>
+            <option value="after_tomorrow">Depois de amanhã</option>
           </select>
           <select
             value={statusFilter}
@@ -3776,7 +3883,7 @@ function LocationMapView({
                   />
                   {selectedDriver.is_online
                     ? getStatusLabel(selectedDriver.status)
-                    : "Offline"}
+                    : "Não disponível"}
                 </span>
               </div>
 

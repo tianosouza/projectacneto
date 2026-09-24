@@ -159,7 +159,7 @@ export function DirectoryPanel({
               <DirectoryRow
                 key={driver.id}
                 title={driver.full_name}
-                detail={`${driver.current_vehicle ? `${driver.current_vehicle.plate} · ${driver.current_vehicle.type}` : (driver.vehicle_model ?? "Veículo não vinculado")} · ${driver.carrier?.name ?? "Autônomo"} · ${driver.city ?? "GPS atual"}`}
+                detail={`${driver.current_vehicle ? `${driver.current_vehicle.plate} · ${driver.current_vehicle.type}` : (driver.vehicle_model ?? "Veículo não vinculado")} · ${driver.carrier?.name ?? "Autônomo"} · ${driver.availability_city ?? driver.city ?? "Cidade não informada"}${driver.availability_at ? ` · até ${new Date(driver.availability_at).toLocaleString("pt-BR")}` : ""}`}
                 badge={driver.homologation_status ?? "Em análise"}
                 onEdit={() => onEditDriver(driver)}
                 onDelete={canDelete ? () => onDeleteDriver(driver) : undefined}

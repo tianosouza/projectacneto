@@ -14,7 +14,6 @@ import {
   Truck,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import { apiFetch } from "@/lib/api";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -42,21 +41,16 @@ export function AuthScreen() {
     employmentType: "autonomous" as "autonomous" | "carrier",
     carrierId: "",
   });
-  const [transportCompanies, setTransportCompanies] = useState<
-    Array<{ id: string; name: string; cnpj: string }>
-  >([]);
   const [resetToken, setResetToken] = useState("");
   const [resetPasswordValue, setResetPasswordValue] = useState("");
   const [registrationNotes, setRegistrationNotes] = useState("");
-  const [requestedRole, setRequestedRole] = useState<"driver" | "carrier">(
-    "driver",
-  );
   const [company, setCompany] = useState({
     legalName: "",
     cnpj: "",
     stateRegistration: "",
     address: "",
   });
+  const [requestedRole] = useState<"driver">("driver");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -73,17 +67,6 @@ export function AuthScreen() {
       document.documentElement.style.overflow = previousHtmlOverflow;
     };
   }, [signupOpen]);
-
-  useEffect(() => {
-    if (!signupOpen || requestedRole !== "driver") return;
-    void apiFetch("/api/transport-companies")
-      .then(
-        (response) =>
-          response.json() as Promise<{ companies?: typeof transportCompanies }>,
-      )
-      .then((body) => setTransportCompanies(body.companies ?? []))
-      .catch(() => setTransportCompanies([]));
-  }, [signupOpen, requestedRole]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -103,15 +86,15 @@ export function AuthScreen() {
         phone,
         requestedRole,
         registrationNotes,
-        requestedRole === "carrier" ? company : undefined,
-        requestedRole === "driver"
-          ? {
-              ...driver,
-              vehicleYear: driver.vehicleYear
-                ? Number(driver.vehicleYear)
-                : undefined,
-            }
-          : undefined,
+        undefined,
+        {
+          ...driver,
+          vehicleYear: driver.vehicleYear
+            ? Number(driver.vehicleYear)
+            : undefined,
+          employmentType: "autonomous",
+          carrierId: undefined,
+        },
       );
       if (result.pending) {
         setSignupOpen(false);
@@ -167,7 +150,7 @@ export function AuthScreen() {
       <ConfirmationModal
         open={registrationSent}
         title="Cadastro enviado"
-        message="Seu cadastro foi enviado com sucesso. Aguarde a aprovação do administrador."
+        message="Seu cadastro de motorista está em análise. Aguarde a aprovação do administrador para acessar o sistema."
         actionLabel="Entendi"
         onClose={() => window.location.reload()}
       />
@@ -390,31 +373,14 @@ export function AuthScreen() {
               </button>
             </div>
             <form onSubmit={handleSubmit} className="mt-4 space-y-2.5">
-              <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
-                <button
-                  type="button"
-                  onClick={() => setRequestedRole("driver")}
-                  className={`rounded-lg px-3 py-2 text-sm font-semibold ${requestedRole === "driver" ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
-                >
-                  Motorista
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRequestedRole("carrier")}
-                  className={`rounded-lg px-3 py-2 text-sm font-semibold ${requestedRole === "carrier" ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
-                >
-                  Transportadora
-                </button>
+              <div className="rounded-xl bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-900">
+                Cadastro de motorista autônomo
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 <InputField
                   icon={User}
                   type="text"
-                  placeholder={
-                    requestedRole === "carrier"
-                      ? "Nome do sócio representante *"
-                      : "Nome completo *"
-                  }
+                  placeholder={"Nome completo *"}
                   value={fullName}
                   onChange={setFullName}
                   required
@@ -488,6 +454,9 @@ export function AuthScreen() {
                         size={18}
                         className="shrink-0 text-slate-400"
                       />
+                      <span className="shrink-0 text-xs font-semibold text-slate-500">
+                        Validade da CNH
+                      </span>
                       <input
                         type="date"
                         value={driver.cnhExpiresAt}
@@ -534,46 +503,15 @@ export function AuthScreen() {
                           onChange={(event) =>
                             setDriver((current) => ({
                               ...current,
-                              employmentType: event.target.value as
-                                | "autonomous"
-                                | "carrier",
-                              carrierId:
-                                event.target.value === "autonomous"
-                                  ? ""
-                                  : current.carrierId,
+                              employmentType: "autonomous",
+                              carrierId: "",
                             }))
                           }
                           className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                         >
-                          <option value="autonomous">Autônomo</option>
-                          <option value="carrier">
-                            Motorista de transportadora
-                          </option>
+                          <option value="autonomous">Sim, sou autônomo</option>
                         </select>
                       </label>
-                      {driver.employmentType === "carrier" && (
-                        <label className="flex flex-col gap-1 text-xs font-semibold text-blue-900">
-                          Transportadora *
-                          <select
-                            value={driver.carrierId}
-                            onChange={(event) =>
-                              setDriver((current) => ({
-                                ...current,
-                                carrierId: event.target.value,
-                              }))
-                            }
-                            required
-                            className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                          >
-                            <option value="">Selecione a transportadora</option>
-                            {transportCompanies.map((company) => (
-                              <option key={company.id} value={company.id}>
-                                {company.name} · {company.cnpj}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      )}
                     </div>
                     <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-blue-800">
                       <Truck size={15} /> Veículo próprio (obrigatório)
