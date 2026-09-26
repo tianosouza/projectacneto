@@ -21,7 +21,7 @@ if (!tokenSecret || tokenSecret.length < 32) {
   throw new Error("AUTH_SECRET must contain at least 32 characters");
 }
 
-app.use(express.json({ limit: "8mb" }));
+app.use(express.json({ limit: "20mb" }));
 app.use((request, response, next) => {
   const origin = request.get("origin");
   if (origin && (corsOrigins.size === 0 || corsOrigins.has("*") || corsOrigins.has(origin))) {
@@ -393,6 +393,31 @@ app.post("/api/auth/signup", async (request, response) => {
   const stateRegistration = typeof companyData.stateRegistration === "string" ? companyData.stateRegistration.trim() || null : null;
   const address = typeof companyData.address === "string" ? companyData.address.trim() : "";
   const driverData = request.body?.driver || {};
+  const attachments = Array.isArray(request.body?.attachments) ? request.body.attachments : [];
+  const allowedAttachmentTypes = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
+  if (["driver", "carrier"].includes(requestedRole) && attachments.length === 0) return response.status(400).json({ error: "Anexe ao menos um documento para continuar" });
+  if (attachments.length > 5) return response.status(400).json({ error: "Anexe no máximo 5 arquivos" });
+  if (attachments.length && !["driver", "carrier"].includes(requestedRole)) return response.status(400).json({ error: "Anexos estão disponíveis apenas para motoristas e transportadoras" });
+  let attachmentBytes = 0;
+  const validatedAttachments = [];
+  for (const attachment of attachments) {
+    if (typeof attachment?.data !== "string" || typeof attachment?.name !== "string") return response.status(400).json({ error: "Um dos anexos é inválido" });
+    const match = attachment.data.match(/^data:([\w.+-]+\/[\w.+-]+);base64,([A-Za-z0-9+/]*={0,2})$/);
+    if (!match || !allowedAttachmentTypes.has(match[1])) return response.status(400).json({ error: "Use arquivos PDF, JPG, PNG ou WebP" });
+    const fileBuffer = Buffer.from(match[2], "base64");
+    if (fileBuffer.toString("base64") !== match[2]) return response.status(400).json({ error: "Um dos anexos está corrompido" });
+    const signatureMatches = {
+      "application/pdf": fileBuffer.subarray(0, 5).toString() === "%PDF-",
+      "image/jpeg": fileBuffer[0] === 0xff && fileBuffer[1] === 0xd8 && fileBuffer[2] === 0xff,
+      "image/png": fileBuffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+      "image/webp": fileBuffer.subarray(0, 4).toString() === "RIFF" && fileBuffer.subarray(8, 12).toString() === "WEBP",
+    };
+    if (!signatureMatches[match[1]] || fileBuffer.length > 5 * 1024 * 1024) return response.status(400).json({ error: "Cada arquivo deve ser válido e ter no máximo 5 MB" });
+    attachmentBytes += fileBuffer.length;
+    if (attachmentBytes > 12 * 1024 * 1024) return response.status(400).json({ error: "O tamanho total dos anexos não pode passar de 12 MB" });
+    const name = attachment.name.split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 180) || "anexo";
+    validatedAttachments.push({ name, mimeType: match[1], dataBase64: match[2] });
+  }
   const employmentType = ["autonomous", "carrier"].includes(driverData.employmentType)
     ? driverData.employmentType
     : "autonomous";
@@ -416,6 +441,9 @@ app.post("/api/auth/signup", async (request, response) => {
       if (["carrier", "client"].includes(requestedRole)) {
         const company = await transaction.transportCompany.create({ data: { userId: user.id, legalName, cnpj, stateRegistration, phone, address, email, status: "in_analysis" } });
         await transaction.profile.update({ where: { userId: user.id }, data: { companyId: company.id } });
+      }
+      if (validatedAttachments.length) {
+        await transaction.registrationAttachment.createMany({ data: validatedAttachments.map((attachment) => ({ ...attachment, userId: user.id })) });
       }
     });
     broadcast("registration-created");
@@ -600,16 +628,16 @@ app.get("/api/admin/pending-users", auth, requireOperations, async (_request, re
       approvalClosed: false,
       ...(isOperator ? { requestedRole: { in: ["driver", "carrier", "client"] } } : {}),
     },
-    include: { user: { include: { driver: { include: { carrierLinks: { where: { endedAt: null }, include: { company: true }, take: 1 } } } } }, company: true },
+    include: { user: { include: { driver: { include: { carrierLinks: { where: { endedAt: null }, include: { company: true }, take: 1 } } }, registrationAttachments: { select: { id: true, name: true, mimeType: true } } } }, company: true },
     orderBy: { createdAt: "asc" },
   });
-  response.json({ users: profiles.map((profile) => ({ id: profile.userId, profile_id: profile.id, full_name: profile.fullName, email: profile.user.email, phone: profile.user.phone, role: profile.role, requested_role: profile.requestedRole, company_id: profile.companyId, company: profile.company ? { legal_name: profile.company.legalName, cnpj: profile.company.cnpj, state_registration: profile.company.stateRegistration, phone: profile.company.phone, address: profile.company.address, email: profile.company.email, status: profile.company.status } : null, registration_notes: profile.registrationNotes, driver: profile.user.driver ? { full_name: profile.user.driver.fullName, phone: profile.user.driver.phone, cpf: profile.user.driver.cpf, cnh: profile.user.driver.cnh, cnh_category: profile.user.driver.cnhCategory, cnh_expires_at: profile.user.driver.cnhExpiresAt?.toISOString() || "", vehicle_model: profile.user.driver.vehicleModel, plate: profile.user.driver.plate, vehicle_year: profile.user.driver.vehicleYear, city: profile.user.driver.city, state: profile.user.driver.state, capacity: profile.user.driver.capacity, compartments: profile.user.driver.compartments, employment_type: profile.user.driver.employmentType, carrier: profile.user.driver.carrierLinks?.[0]?.company ? publicCompany(profile.user.driver.carrierLinks[0].company) : null, location_sharing_authorized: profile.user.driver.locationSharingAuthorized } : null, created_at: profile.createdAt.toISOString() })) });
+  response.json({ users: profiles.map((profile) => ({ id: profile.userId, profile_id: profile.id, full_name: profile.fullName, email: profile.user.email, phone: profile.user.phone, role: profile.role, requested_role: profile.requestedRole, company_id: profile.companyId, company: profile.company ? { legal_name: profile.company.legalName, cnpj: profile.company.cnpj, state_registration: profile.company.stateRegistration, phone: profile.company.phone, address: profile.company.address, email: profile.company.email, status: profile.company.status } : null, registration_notes: profile.registrationNotes, attachments: profile.user.registrationAttachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mime_type: attachment.mimeType })), driver: profile.user.driver ? { full_name: profile.user.driver.fullName, phone: profile.user.driver.phone, cpf: profile.user.driver.cpf, cnh: profile.user.driver.cnh, cnh_category: profile.user.driver.cnhCategory, cnh_expires_at: profile.user.driver.cnhExpiresAt?.toISOString() || "", vehicle_model: profile.user.driver.vehicleModel, plate: profile.user.driver.plate, vehicle_year: profile.user.driver.vehicleYear, city: profile.user.driver.city, state: profile.user.driver.state, capacity: profile.user.driver.capacity, compartments: profile.user.driver.compartments, employment_type: profile.user.driver.employmentType, carrier: profile.user.driver.carrierLinks?.[0]?.company ? publicCompany(profile.user.driver.carrierLinks[0].company) : null, location_sharing_authorized: profile.user.driver.locationSharingAuthorized } : null, created_at: profile.createdAt.toISOString() })) });
 });
 
 app.get("/api/admin/registration-requests", auth, requireAdmin, async (_request, response) => {
   const profiles = await prisma.profile.findMany({
     where: { approved: false },
-    include: { user: { include: { driver: { include: { carrierLinks: { where: { endedAt: null }, include: { company: true }, take: 1 } } } } }, company: true },
+    include: { user: { include: { driver: { include: { carrierLinks: { where: { endedAt: null }, include: { company: true }, take: 1 } } }, registrationAttachments: { select: { id: true, name: true, mimeType: true } } } }, company: true },
     orderBy: { createdAt: "desc" },
   });
   response.json({
@@ -622,6 +650,7 @@ app.get("/api/admin/registration-requests", auth, requireAdmin, async (_request,
       role: profile.role,
       requested_role: profile.requestedRole,
       registration_notes: profile.registrationNotes,
+      attachments: profile.user.registrationAttachments.map((attachment) => ({ id: attachment.id, name: attachment.name, mime_type: attachment.mimeType })),
       company_id: profile.companyId,
       company: profile.company ? { legal_name: profile.company.legalName, cnpj: profile.company.cnpj, state_registration: profile.company.stateRegistration, phone: profile.company.phone, address: profile.company.address, email: profile.company.email, status: profile.company.status } : null,
       driver: profile.user.driver ? { full_name: profile.user.driver.fullName, phone: profile.user.driver.phone, cpf: profile.user.driver.cpf, cnh: profile.user.driver.cnh, cnh_category: profile.user.driver.cnhCategory, cnh_expires_at: profile.user.driver.cnhExpiresAt?.toISOString() || "", vehicle_model: profile.user.driver.vehicleModel, plate: profile.user.driver.plate, vehicle_year: profile.user.driver.vehicleYear, city: profile.user.driver.city, state: profile.user.driver.state, capacity: profile.user.driver.capacity, compartments: profile.user.driver.compartments, employment_type: profile.user.driver.employmentType, carrier: profile.user.driver.carrierLinks?.[0]?.company ? publicCompany(profile.user.driver.carrierLinks[0].company) : null, location_sharing_authorized: profile.user.driver.locationSharingAuthorized } : null,
@@ -629,6 +658,25 @@ app.get("/api/admin/registration-requests", auth, requireAdmin, async (_request,
       created_at: profile.createdAt.toISOString(),
     }))
   });
+});
+
+app.get("/api/admin/registration-requests/:userId/attachments/:attachmentId", auth, requireOperations, async (request, response) => {
+  const profile = await prisma.profile.findFirst({
+    where: {
+      userId: request.params.userId,
+      approved: false,
+      ...(request.user.profile?.role === "operator" ? { approvalClosed: false, requestedRole: { in: ["driver", "carrier", "client"] } } : {}),
+    },
+    select: { userId: true },
+  });
+  if (!profile) return response.status(404).json({ error: "Solicitação não encontrada" });
+  const attachment = await prisma.registrationAttachment.findFirst({ where: { id: request.params.attachmentId, userId: profile.userId } });
+  if (!attachment) return response.status(404).json({ error: "Anexo não encontrado" });
+  response.setHeader("Content-Type", attachment.mimeType);
+  const disposition = request.query.view === "1" ? "inline" : "attachment";
+  response.setHeader("Content-Disposition", `${disposition}; filename*=UTF-8''${encodeURIComponent(attachment.name)}`);
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.send(Buffer.from(attachment.dataBase64, "base64"));
 });
 
 app.patch("/api/admin/users/:userId/close-approval", auth, requireAdmin, async (request, response) => {

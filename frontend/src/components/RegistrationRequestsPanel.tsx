@@ -1,5 +1,7 @@
 import type { ApprovalDriverFields, PendingUser } from "@/lib/dashboardTypes";
-import { Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Download, Eye, Loader2, X } from "lucide-react";
+import { apiFetch } from "@/lib/api";
 
 export function RegistrationRequestsPanel({
   requests,
@@ -45,6 +47,60 @@ export function RegistrationRequestsPanel({
   onClose: (userId: string) => void;
   onReopen: (userId: string) => void;
 }) {
+  const [preview, setPreview] = useState<{
+    name: string;
+    mimeType: string;
+    url: string;
+  } | null>(null);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+
+  useEffect(
+    () => () => {
+      if (preview) URL.revokeObjectURL(preview.url);
+    },
+    [preview],
+  );
+
+  const handleAttachment = async (
+    requestId: string,
+    attachment: NonNullable<PendingUser["attachments"]>[number],
+    action: "view" | "download",
+  ) => {
+    setAttachmentError(null);
+    try {
+      const response = await apiFetch(
+        `/api/admin/registration-requests/${requestId}/attachments/${attachment.id}${action === "view" ? "?view=1" : ""}`,
+        {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
+          },
+        },
+      );
+      if (!response.ok) {
+        setAttachmentError("Não foi possível acessar este documento.");
+        return;
+      }
+
+      const url = URL.createObjectURL(await response.blob());
+      if (action === "view") {
+        setPreview({
+          name: attachment.name,
+          mimeType: attachment.mime_type,
+          url,
+        });
+        return;
+      }
+
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = attachment.name;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setAttachmentError("Não foi possível acessar este documento.");
+    }
+  };
+
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-5 flex items-center justify-between gap-3">
@@ -112,6 +168,64 @@ export function RegistrationRequestsPanel({
                     {request.approval_closed ? "Fechada" : "Em análise"}
                   </span>
                 </div>
+                {["driver", "carrier"].includes(request.requested_role) && (
+                  <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold text-slate-700">
+                      Documentos enviados
+                    </p>
+                    {request.attachments?.length ? (
+                      <div className="space-y-2">
+                        {request.attachments.map((attachment) => (
+                          <div
+                            key={attachment.id}
+                            className="flex flex-wrap items-center justify-between gap-2"
+                          >
+                            <span className="min-w-0 truncate text-xs text-slate-600">
+                              {attachment.name}
+                            </span>
+                            <div className="flex shrink-0 gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleAttachment(
+                                    request.id,
+                                    attachment,
+                                    "view",
+                                  )
+                                }
+                                className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+                              >
+                                <Eye size={14} /> Visualizar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleAttachment(
+                                    request.id,
+                                    attachment,
+                                    "download",
+                                  )
+                                }
+                                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                              >
+                                <Download size={14} /> Baixar
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-amber-700">
+                        Nenhum documento anexado a este cadastro.
+                      </p>
+                    )}
+                    {attachmentError && (
+                      <p role="alert" className="text-xs text-rose-700">
+                        {attachmentError}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {(selectedRole === "carrier" || selectedRole === "client") && (
                   <div className="grid gap-2 rounded-xl border border-blue-100 bg-blue-50/60 p-3 sm:grid-cols-2">
                     <p className="text-xs font-bold uppercase tracking-wide text-blue-900 sm:col-span-2">
@@ -334,6 +448,45 @@ export function RegistrationRequestsPanel({
               </div>
             );
           })}
+        </div>
+      )}
+      {preview && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/70 p-3 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Visualização de ${preview.name}`}
+        >
+          <div className="flex h-[90dvh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+              <p className="min-w-0 truncate text-sm font-semibold text-slate-800">
+                {preview.name}
+              </p>
+              <button
+                type="button"
+                onClick={() => setPreview(null)}
+                className="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                aria-label="Fechar visualização"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 bg-slate-100">
+              {preview.mimeType.startsWith("image/") ? (
+                <img
+                  src={preview.url}
+                  alt={preview.name}
+                  className="h-full w-full object-contain"
+                />
+              ) : (
+                <iframe
+                  src={preview.url}
+                  title={preview.name}
+                  className="h-full w-full border-0 bg-white"
+                />
+              )}
+            </div>
+          </div>
         </div>
       )}
     </section>

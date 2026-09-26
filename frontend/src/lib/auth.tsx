@@ -116,6 +116,7 @@ type AuthContextValue = {
       employmentType?: "autonomous" | "carrier";
       carrierId?: string;
     },
+    attachments?: File[],
   ) => Promise<{ error: string | null; pending?: boolean }>;
   requestPasswordReset: (
     email: string,
@@ -230,8 +231,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       state?: string;
       locationSharingAuthorized?: boolean;
     },
+    attachments: File[] = [],
   ) => {
     try {
+      const encodedAttachments = await Promise.all(
+        attachments.map(
+          (file) =>
+            new Promise<{ name: string; data: string }>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () =>
+                typeof reader.result === "string"
+                  ? resolve({ name: file.name, data: reader.result })
+                  : reject(new Error("Não foi possível ler o anexo"));
+              reader.onerror = () =>
+                reject(new Error("Não foi possível ler o anexo"));
+              reader.readAsDataURL(file);
+            }),
+        ),
+      );
       const response = await apiFetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -244,6 +261,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           registrationNotes,
           company,
           driver,
+          attachments: encodedAttachments,
         }),
       });
       const body = (await response.json()) as {

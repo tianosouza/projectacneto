@@ -130,6 +130,13 @@ android {
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
+    // Newer CMake ships a long-path-aware ninja and a short staging dir avoids Windows' 260-char path limit.
+    externalNativeBuild {
+        cmake {
+            version "3.30.5"
+            buildStagingDirectory "C:/cxx"
+        }
+    }
 }
 
 android.applicationVariants.all { variant ->

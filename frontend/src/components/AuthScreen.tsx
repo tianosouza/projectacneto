@@ -12,6 +12,8 @@ import {
   IdCard,
   CalendarDays,
   Truck,
+  Paperclip,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
@@ -48,6 +50,7 @@ export function AuthScreen() {
   const [resetToken, setResetToken] = useState("");
   const [resetPasswordValue, setResetPasswordValue] = useState("");
   const [registrationNotes, setRegistrationNotes] = useState("");
+  const [attachments, setAttachments] = useState<File[]>([]);
   const [requestedRole, setRequestedRole] = useState<
     "driver" | "carrier" | "client"
   >("driver");
@@ -96,6 +99,27 @@ export function AuthScreen() {
         setSubmitting(false);
         return;
       }
+      if (
+        ["driver", "carrier"].includes(requestedRole) &&
+        attachments.length === 0
+      ) {
+        setError("Anexe ao menos um documento para continuar.");
+        setSubmitting(false);
+        return;
+      }
+      if (attachments.some((file) => file.size > 5 * 1024 * 1024)) {
+        setError("Cada arquivo pode ter no máximo 5 MB.");
+        setSubmitting(false);
+        return;
+      }
+      if (
+        attachments.reduce((total, file) => total + file.size, 0) >
+        12 * 1024 * 1024
+      ) {
+        setError("O tamanho total dos anexos não pode passar de 12 MB.");
+        setSubmitting(false);
+        return;
+      }
       const result = await signUp(
         email,
         password,
@@ -114,6 +138,9 @@ export function AuthScreen() {
                 : undefined,
             }
           : undefined,
+        requestedRole === "driver" || requestedRole === "carrier"
+          ? attachments
+          : [],
       );
       if (result.pending) {
         setSignupOpen(false);
@@ -732,6 +759,83 @@ export function AuthScreen() {
                     }
                     required
                   />
+                </div>
+              )}
+              {requestedRole !== "client" && (
+                <div className="space-y-2 rounded-xl border border-slate-200 p-3">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-700">
+                    <Paperclip size={16} />
+                    Anexar documentos *
+                    <input
+                      type="file"
+                      accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+                      multiple
+                      className="sr-only"
+                      onChange={(event) => {
+                        const selected = Array.from(event.target.files ?? []);
+                        const next = [...attachments, ...selected];
+                        if (next.length > 5) {
+                          setError("Você pode anexar no máximo 5 arquivos.");
+                        } else if (
+                          selected.some(
+                            (file) =>
+                              ![
+                                "application/pdf",
+                                "image/jpeg",
+                                "image/png",
+                                "image/webp",
+                              ].includes(file.type),
+                          )
+                        ) {
+                          setError("Use arquivos PDF, JPG, PNG ou WebP.");
+                        } else if (
+                          selected.some((file) => file.size > 5 * 1024 * 1024)
+                        ) {
+                          setError("Cada arquivo pode ter no máximo 5 MB.");
+                        } else if (
+                          next.reduce((total, file) => total + file.size, 0) >
+                          12 * 1024 * 1024
+                        ) {
+                          setError(
+                            "O tamanho total dos anexos não pode passar de 12 MB.",
+                          );
+                        } else {
+                          setAttachments(next);
+                          setError(null);
+                        }
+                        event.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <p className="text-xs text-slate-500">
+                    Obrigatório: envie pelo menos 1 PDF ou foto. Até 5 arquivos
+                    e 5 MB por arquivo.
+                  </p>
+                  {attachments.map((file, index) => (
+                    <div
+                      key={`${file.name}-${file.lastModified}-${index}`}
+                      className="flex items-center justify-between gap-2 text-xs text-slate-600"
+                    >
+                      <span className="min-w-0 truncate">
+                        {file.name} · {(file.size / (1024 * 1024)).toFixed(1)}{" "}
+                        MB
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAttachments((current) =>
+                            current.filter(
+                              (_, fileIndex) => fileIndex !== index,
+                            ),
+                          )
+                        }
+                        className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-rose-600"
+                        aria-label={`Remover ${file.name}`}
+                      >
+                        <X size={15} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
               <textarea

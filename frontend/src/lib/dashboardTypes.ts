@@ -29,6 +29,7 @@ export type PendingUser = {
   role: string;
   requested_role: "driver" | "carrier" | "client" | "operator";
   registration_notes: string | null;
+  attachments?: Array<{ id: string; name: string; mime_type: string }>;
   approval_closed?: boolean;
   company_id?: string | null;
   company?: {
