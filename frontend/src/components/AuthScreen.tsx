@@ -12,13 +12,12 @@ import {
   IdCard,
   CalendarDays,
   Truck,
-  Paperclip,
-  X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { RegistrationAttachmentsField } from "@/components/RegistrationAttachmentsField";
 
 export function AuthScreen() {
   const { signIn, signUp, requestPasswordReset, resetPassword } = useAuth();
@@ -261,17 +260,19 @@ export function AuthScreen() {
             <span className="text-base font-bold text-white">
               A C Neto Transportes
             </span>
-            <ThemeToggle />
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-2xl sm:p-8">
-            <h2 className="text-xl font-bold text-[#0b1d3a]">
-              {mode === "signin"
-                ? "Bem-vindo de volta"
-                : mode === "forgot"
-                  ? "Recuperar senha"
-                  : "Definir nova senha"}
-            </h2>
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="text-xl font-bold text-[#0b1d3a]">
+                {mode === "signin"
+                  ? "Bem-vindo de volta"
+                  : mode === "forgot"
+                    ? "Recuperar senha"
+                    : "Definir nova senha"}
+              </h2>
+              <ThemeToggle />
+            </div>
             <p className="mt-1 text-sm text-slate-500">
               {mode === "signin"
                 ? "Acesse o Next Driver com seus dados."
@@ -762,81 +763,10 @@ export function AuthScreen() {
                 </div>
               )}
               {requestedRole !== "client" && (
-                <div className="space-y-2 rounded-xl border border-slate-200 p-3">
-                  <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-700">
-                    <Paperclip size={16} />
-                    Anexar documentos *
-                    <input
-                      type="file"
-                      accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
-                      multiple
-                      className="sr-only"
-                      onChange={(event) => {
-                        const selected = Array.from(event.target.files ?? []);
-                        const next = [...attachments, ...selected];
-                        if (next.length > 5) {
-                          setError("Você pode anexar no máximo 5 arquivos.");
-                        } else if (
-                          selected.some(
-                            (file) =>
-                              ![
-                                "application/pdf",
-                                "image/jpeg",
-                                "image/png",
-                                "image/webp",
-                              ].includes(file.type),
-                          )
-                        ) {
-                          setError("Use arquivos PDF, JPG, PNG ou WebP.");
-                        } else if (
-                          selected.some((file) => file.size > 5 * 1024 * 1024)
-                        ) {
-                          setError("Cada arquivo pode ter no máximo 5 MB.");
-                        } else if (
-                          next.reduce((total, file) => total + file.size, 0) >
-                          12 * 1024 * 1024
-                        ) {
-                          setError(
-                            "O tamanho total dos anexos não pode passar de 12 MB.",
-                          );
-                        } else {
-                          setAttachments(next);
-                          setError(null);
-                        }
-                        event.target.value = "";
-                      }}
-                    />
-                  </label>
-                  <p className="text-xs text-slate-500">
-                    Obrigatório: envie pelo menos 1 PDF ou foto. Até 5 arquivos
-                    e 5 MB por arquivo.
-                  </p>
-                  {attachments.map((file, index) => (
-                    <div
-                      key={`${file.name}-${file.lastModified}-${index}`}
-                      className="flex items-center justify-between gap-2 text-xs text-slate-600"
-                    >
-                      <span className="min-w-0 truncate">
-                        {file.name} · {(file.size / (1024 * 1024)).toFixed(1)}{" "}
-                        MB
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAttachments((current) =>
-                            current.filter(
-                              (_, fileIndex) => fileIndex !== index,
-                            ),
-                          )
-                        }
-                        className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-rose-600"
-                        aria-label={`Remover ${file.name}`}
-                      >
-                        <X size={15} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                <RegistrationAttachmentsField
+                  attachments={attachments}
+                  onChange={setAttachments}
+                />
               )}
               <textarea
                 value={registrationNotes}

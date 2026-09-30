@@ -21,6 +21,20 @@ export type DemoContact = {
   negotiationsEnabled?: boolean;
 };
 
+export type OperationalLocation = {
+  id: string;
+  kind: "collection_point" | "final_customer";
+  name: string;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  company_ids?: string[];
+};
+
 export type PendingUser = {
   id: string;
   full_name: string | null;
@@ -148,4 +162,66 @@ export type RouteState = {
   summary: RouteSummary | null;
   loading: boolean;
   error: string;
+};
+
+export type FreightRouteStatus =
+  | "open"
+  | "assigned"
+  | "in_progress"
+  | "completed"
+  | "cancelled";
+
+export type FreightRouteAssignment = {
+  id: string;
+  driver_id: string;
+  driver: DemoDriver | null;
+  capacity: string | null;
+  status: "active" | "completed" | "cancelled";
+  accepted_at: string;
+  ended_at: string | null;
+};
+
+export type FreightRoute = {
+  id: string;
+  created_by_user_id: string;
+  created_by: { id: string; full_name: string | null; email: string } | null;
+  collection_point_id: string;
+  collection_point: OperationalLocation | null;
+  final_customer_id: string;
+  final_customer: OperationalLocation | null;
+  total_capacity: string;
+  cargo: string | null;
+  product: string | null;
+  notes: string | null;
+  distance_km: number | null;
+  status: FreightRouteStatus;
+  scheduled_at: string | null;
+  assignments: FreightRouteAssignment[];
+  active_driver_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FreightRouteReportSummary = {
+  total_routes: number;
+  total_distance_km: number;
+  status_breakdown: Record<string, number>;
+  by_driver: Array<{ driver_id: string; name: string; route_count: number }>;
+  by_client: Array<{ location_id: string; name: string; route_count: number }>;
+};
+
+export type FreightRouteDashboard = {
+  total_routes: number;
+  active_routes: number;
+  completed_routes: number;
+  cancelled_routes: number;
+  total_distance_km: number;
+  status_breakdown: Record<string, number>;
+  top_drivers: Array<{ driver_id: string; name: string; route_count: number }>;
+  top_clients: Array<{
+    location_id: string;
+    name: string;
+    route_count: number;
+  }>;
+  daily_series: Array<{ date: string; count: number }>;
 };

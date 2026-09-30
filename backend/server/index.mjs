@@ -193,6 +193,7 @@ const publicDriver = (driver) => ({
   email: driver.email,
   vehicle_model: driver.vehicleModel,
   vehicle_year: driver.vehicleYear,
+  capacity: driver.capacity,
   compartments: driver.compartments,
   plate: driver.plate,
   cnh: driver.cnh,
@@ -844,6 +845,22 @@ const parseBrazilianMoney = (value) => {
   return Number(normalized);
 };
 
+// Wrapper para o OSRM que nunca lança: falhas de rede viram { error } em vez de derrubar a rota Express (o que devolveria HTML de erro em vez de JSON).
+const fetchOsrmRoute = async (coordinates, query) => {
+  let routeResponse;
+  try {
+    routeResponse = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?${query}`);
+  } catch {
+    return { error: "Não foi possível conectar ao serviço de cálculo de rotas" };
+  }
+  if (!routeResponse.ok) return { error: "Serviço de rotas indisponível" };
+  try {
+    return { body: await routeResponse.json() };
+  } catch {
+    return { error: "Resposta inválida do serviço de cálculo de rotas" };
+  }
+};
+
 const loadNegotiationForRequest = async (request) => {
   const negotiation = await prisma.freightNegotiation.findUnique({
     where: { id: request.params.negotiationId },
@@ -877,9 +894,8 @@ app.post("/api/negotiations/from-route", auth, requireOperations, requireNegotia
     return response.status(400).json({ error: "Motorista, posto e cliente precisam possuir coordenadas GPS" });
   }
   const coordinates = points.map((point) => `${point.longitude},${point.latitude}`).join(";");
-  const routeResponse = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=false&steps=false`);
-  if (!routeResponse.ok) return response.status(502).json({ error: "Serviço de rotas indisponível" });
-  const routeBody = await routeResponse.json();
+  const { body: routeBody, error: osrmError } = await fetchOsrmRoute(coordinates, "overview=false&steps=false");
+  if (osrmError) return response.status(502).json({ error: osrmError });
   const route = routeBody.routes?.[0];
   if (routeBody.code !== "Ok" || !route || !Number.isFinite(route.distance) || route.distance <= 0) return response.status(422).json({ error: "Não foi possível calcular a distância da rota" });
   const distanceKm = route.distance / 1000;
@@ -1245,9 +1261,8 @@ app.post("/api/operations/routes", auth, requireOperations, async (request, resp
   if (!driver || !collectionPoint || !finalCustomer || collectionPoint.kind !== "collection_point" || finalCustomer.kind !== "final_customer") return response.status(400).json({ error: "Motorista, posto de coleta e cliente final são obrigatórios" });
   if (points.some((point) => !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude))) return response.status(400).json({ error: "Todos os pontos precisam ter coordenadas GPS" });
   const coordinates = points.map((point) => `${point.longitude},${point.latitude}`).join(";");
-  const routeResponse = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson&steps=false`);
-  if (!routeResponse.ok) return response.status(502).json({ error: "Serviço de rotas indisponível" });
-  const routeBody = await routeResponse.json();
+  const { body: routeBody, error: osrmError } = await fetchOsrmRoute(coordinates, "overview=full&geometries=geojson&steps=false");
+  if (osrmError) return response.status(502).json({ error: osrmError });
   const route = routeBody.routes?.[0];
   if (routeBody.code !== "Ok" || !route) return response.status(422).json({ error: "Não foi possível calcular a rota entre os pontos" });
   response.json({ order: ["driver", "collection_point", "final_customer"], distance: route.distance, duration: route.duration, geometry: route.geometry });
@@ -1488,6 +1503,379 @@ app.delete("/api/admin/drivers/:driverId", auth, requireOperations, async (reque
   response.status(204).end();
 });
 
+// ---------------------------------------------------------------------------
+// Rotas de frete (FreightRoute): uma rota liga um posto de coleta a um
+// cliente final e pode receber vários motoristas ao longo do tempo, mas cada
+// motorista só pode manter um vínculo (assignment) ativo por vez, em
+// qualquer rota do sistema.
+// ---------------------------------------------------------------------------
+
+const freightRouteStatuses = ["open", "assigned", "in_progress", "completed", "cancelled"];
+const freightRouteOpenStatuses = ["open", "assigned", "in_progress"];
+const freightRouteAssignmentStatuses = ["active", "completed", "cancelled"];
+
+const freightRouteInclude = {
+  createdBy: true,
+  collectionPoint: true,
+  finalCustomer: true,
+  assignments: { include: { driver: true }, orderBy: { acceptedAt: "desc" } },
+};
+
+const publicFreightRoute = (route) => ({
+  id: route.id,
+  created_by_user_id: route.createdByUserId,
+  created_by: route.createdBy ? publicUser(route.createdBy) : null,
+  collection_point_id: route.collectionPointId,
+  collection_point: route.collectionPoint ? publicOperationalLocation(route.collectionPoint) : null,
+  final_customer_id: route.finalCustomerId,
+  final_customer: route.finalCustomer ? publicOperationalLocation(route.finalCustomer) : null,
+  total_capacity: route.totalCapacity,
+  cargo: route.cargo,
+  product: route.product,
+  notes: route.notes,
+  distance_km: route.distanceKm,
+  status: route.status,
+  scheduled_at: route.scheduledAt?.toISOString() || null,
+  assignments: (route.assignments || []).map((assignment) => ({
+    id: assignment.id,
+    driver_id: assignment.driverId,
+    driver: assignment.driver ? publicDriver(assignment.driver) : null,
+    capacity: assignment.capacity,
+    status: assignment.status,
+    accepted_at: assignment.acceptedAt.toISOString(),
+    ended_at: assignment.endedAt?.toISOString() || null,
+  })),
+  active_driver_count: (route.assignments || []).filter((assignment) => assignment.status === "active").length,
+  created_at: route.createdAt.toISOString(),
+  updated_at: route.updatedAt.toISOString(),
+});
+
+const parseDateParam = (value) => {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed : undefined;
+};
+
+app.post("/api/freight-routes", auth, requireOperations, async (request, response) => {
+  const body = request.body || {};
+  const collectionPointId = typeof body.collectionPointId === "string" ? body.collectionPointId : "";
+  const finalCustomerId = typeof body.finalCustomerId === "string" ? body.finalCustomerId : "";
+  const totalCapacity = typeof body.totalCapacity === "string" ? body.totalCapacity.trim() : "";
+  const scheduledAt = body.scheduledAt ? new Date(body.scheduledAt) : null;
+
+  if (!collectionPointId || !finalCustomerId) {
+    return response.status(400).json({ error: "Selecione o posto de coleta e o cliente final da rota" });
+  }
+  if (collectionPointId === finalCustomerId) {
+    return response.status(400).json({ error: "Posto de coleta e cliente final devem ser diferentes" });
+  }
+  if (!totalCapacity) {
+    return response.status(400).json({ error: "Informe a capacidade total da rota" });
+  }
+  if (scheduledAt && !Number.isFinite(scheduledAt.getTime())) {
+    return response.status(400).json({ error: "Data/hora agendada inválida" });
+  }
+
+  const [collectionPoint, finalCustomer] = await Promise.all([
+    prisma.operationalLocation.findUnique({ where: { id: collectionPointId } }),
+    prisma.operationalLocation.findUnique({ where: { id: finalCustomerId } }),
+  ]);
+  if (!collectionPoint || collectionPoint.kind !== "collection_point" || !collectionPoint.active) {
+    return response.status(400).json({ error: "Posto de coleta inválido ou inativo" });
+  }
+  if (!finalCustomer || finalCustomer.kind !== "final_customer" || !finalCustomer.active) {
+    return response.status(400).json({ error: "Cliente final inválido ou inativo" });
+  }
+  if (![collectionPoint, finalCustomer].every((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude))) {
+    return response.status(400).json({ error: "O posto de coleta e o cliente final precisam ter endereço com coordenadas GPS para calcular a distância" });
+  }
+
+  // Distância sempre calculada a partir dos endereços (coordenadas) dos dois pontos, nunca digitada manualmente.
+  const coordinates = `${collectionPoint.longitude},${collectionPoint.latitude};${finalCustomer.longitude},${finalCustomer.latitude}`;
+  const { body: routeBody, error: osrmError } = await fetchOsrmRoute(coordinates, "overview=false&steps=false");
+  if (osrmError) return response.status(502).json({ error: osrmError });
+  const calculatedRoute = routeBody.routes?.[0];
+  if (routeBody.code !== "Ok" || !calculatedRoute || !Number.isFinite(calculatedRoute.distance) || calculatedRoute.distance <= 0) {
+    return response.status(422).json({ error: "Não foi possível calcular a distância entre os endereços informados" });
+  }
+  const distanceKm = calculatedRoute.distance / 1000;
+
+  const route = await prisma.freightRoute.create({
+    data: {
+      createdByUserId: request.user.id,
+      collectionPointId,
+      finalCustomerId,
+      totalCapacity,
+      cargo: typeof body.cargo === "string" ? body.cargo.trim().slice(0, 200) || null : null,
+      product: typeof body.product === "string" ? body.product.trim().slice(0, 200) || null : null,
+      notes: typeof body.notes === "string" ? body.notes.trim().slice(0, 1000) || null : null,
+      distanceKm,
+      scheduledAt,
+    },
+    include: freightRouteInclude,
+  });
+  broadcast("freight-route-created");
+  response.status(201).json({ route: publicFreightRoute(route) });
+});
+
+app.get("/api/freight-routes", auth, requireOperations, async (request, response) => {
+  const status = typeof request.query.status === "string" ? request.query.status : "";
+  const clientId = typeof request.query.clientId === "string" ? request.query.clientId : "";
+  const driverId = typeof request.query.driverId === "string" ? request.query.driverId : "";
+  const from = parseDateParam(request.query.from);
+  const to = parseDateParam(request.query.to);
+  if (status && !freightRouteStatuses.includes(status)) return response.status(400).json({ error: "Status de rota inválido" });
+  if (from === undefined || to === undefined) return response.status(400).json({ error: "Datas de filtro inválidas" });
+
+  const where = {
+    ...(status ? { status } : {}),
+    ...(clientId ? { OR: [{ collectionPointId: clientId }, { finalCustomerId: clientId }] } : {}),
+    ...(driverId ? { assignments: { some: { driverId } } } : {}),
+    ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+  };
+  const routes = await prisma.freightRoute.findMany({ where, include: freightRouteInclude, orderBy: { createdAt: "desc" } });
+  response.json({ routes: routes.map(publicFreightRoute) });
+});
+
+app.get("/api/freight-routes/reports", auth, requireOperations, async (request, response) => {
+  const clientId = typeof request.query.clientId === "string" ? request.query.clientId : "";
+  const driverId = typeof request.query.driverId === "string" ? request.query.driverId : "";
+  const from = parseDateParam(request.query.from);
+  const to = parseDateParam(request.query.to);
+  if (from === undefined || to === undefined) return response.status(400).json({ error: "Datas de filtro inválidas" });
+
+  const where = {
+    ...(clientId ? { OR: [{ collectionPointId: clientId }, { finalCustomerId: clientId }] } : {}),
+    ...(driverId ? { assignments: { some: { driverId } } } : {}),
+    ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+  };
+  const routes = await prisma.freightRoute.findMany({ where, include: freightRouteInclude, orderBy: { createdAt: "desc" } });
+
+  const statusBreakdown = {};
+  const byDriver = new Map();
+  const byClient = new Map();
+  let totalDistanceKm = 0;
+
+  for (const route of routes) {
+    statusBreakdown[route.status] = (statusBreakdown[route.status] || 0) + 1;
+    totalDistanceKm += route.distanceKm || 0;
+
+    for (const location of [route.collectionPoint, route.finalCustomer]) {
+      if (!location) continue;
+      const entry = byClient.get(location.id) || { location_id: location.id, name: location.name, route_count: 0 };
+      entry.route_count += 1;
+      byClient.set(location.id, entry);
+    }
+
+    const relevantAssignments = driverId
+      ? route.assignments.filter((assignment) => assignment.driverId === driverId)
+      : route.assignments;
+    for (const assignment of relevantAssignments) {
+      if (!assignment.driver) continue;
+      const entry = byDriver.get(assignment.driverId) || { driver_id: assignment.driverId, name: assignment.driver.fullName, route_count: 0 };
+      entry.route_count += 1;
+      byDriver.set(assignment.driverId, entry);
+    }
+  }
+
+  response.json({
+    routes: routes.map(publicFreightRoute),
+    summary: {
+      total_routes: routes.length,
+      total_distance_km: totalDistanceKm,
+      status_breakdown: statusBreakdown,
+      by_driver: [...byDriver.values()].sort((a, b) => b.route_count - a.route_count),
+      by_client: [...byClient.values()].sort((a, b) => b.route_count - a.route_count),
+    },
+  });
+});
+
+app.get("/api/freight-routes/dashboard", auth, requireOperations, async (_request, response) => {
+  const [routes, statusGroups] = await Promise.all([
+    prisma.freightRoute.findMany({ include: freightRouteInclude, orderBy: { createdAt: "desc" } }),
+    prisma.freightRoute.groupBy({ by: ["status"], _count: { _all: true } }),
+  ]);
+
+  const statusBreakdown = Object.fromEntries(statusGroups.map((group) => [group.status, group._count._all]));
+  const totalDistanceKm = routes.reduce((sum, route) => sum + (route.distanceKm || 0), 0);
+
+  const byDriver = new Map();
+  const byClient = new Map();
+  const perDay = new Map();
+  const fourteenDaysAgo = new Date(Date.now() - 13 * 24 * 60 * 60 * 1000);
+  fourteenDaysAgo.setHours(0, 0, 0, 0);
+
+  for (const route of routes) {
+    for (const location of [route.collectionPoint, route.finalCustomer]) {
+      if (!location) continue;
+      const entry = byClient.get(location.id) || { location_id: location.id, name: location.name, route_count: 0 };
+      entry.route_count += 1;
+      byClient.set(location.id, entry);
+    }
+    for (const assignment of route.assignments) {
+      if (!assignment.driver) continue;
+      const entry = byDriver.get(assignment.driverId) || { driver_id: assignment.driverId, name: assignment.driver.fullName, route_count: 0 };
+      entry.route_count += 1;
+      byDriver.set(assignment.driverId, entry);
+    }
+    if (route.createdAt >= fourteenDaysAgo) {
+      const day = route.createdAt.toISOString().slice(0, 10);
+      perDay.set(day, (perDay.get(day) || 0) + 1);
+    }
+  }
+
+  const dailySeries = [];
+  for (let index = 0; index < 14; index += 1) {
+    const day = new Date(fourteenDaysAgo.getTime() + index * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    dailySeries.push({ date: day, count: perDay.get(day) || 0 });
+  }
+
+  response.json({
+    total_routes: routes.length,
+    active_routes: freightRouteOpenStatuses.reduce((sum, key) => sum + (statusBreakdown[key] || 0), 0),
+    completed_routes: statusBreakdown.completed || 0,
+    cancelled_routes: statusBreakdown.cancelled || 0,
+    total_distance_km: totalDistanceKm,
+    status_breakdown: statusBreakdown,
+    top_drivers: [...byDriver.values()].sort((a, b) => b.route_count - a.route_count).slice(0, 5),
+    top_clients: [...byClient.values()].sort((a, b) => b.route_count - a.route_count).slice(0, 5),
+    daily_series: dailySeries,
+  });
+});
+
+app.get("/api/freight-routes/:routeId", auth, requireOperations, async (request, response) => {
+  const route = await prisma.freightRoute.findUnique({ where: { id: request.params.routeId }, include: freightRouteInclude });
+  if (!route) return response.status(404).json({ error: "Rota não encontrada" });
+  response.json({ route: publicFreightRoute(route) });
+});
+
+app.patch("/api/freight-routes/:routeId", auth, requireOperations, async (request, response) => {
+  const route = await prisma.freightRoute.findUnique({ where: { id: request.params.routeId } });
+  if (!route) return response.status(404).json({ error: "Rota não encontrada" });
+  const body = request.body || {};
+  const data = {};
+  if (typeof body.totalCapacity === "string") {
+    if (!body.totalCapacity.trim()) return response.status(400).json({ error: "A capacidade total não pode ficar vazia" });
+    data.totalCapacity = body.totalCapacity.trim();
+  }
+  if (typeof body.cargo === "string") data.cargo = body.cargo.trim().slice(0, 200) || null;
+  if (typeof body.product === "string") data.product = body.product.trim().slice(0, 200) || null;
+  if (typeof body.notes === "string") data.notes = body.notes.trim().slice(0, 1000) || null;
+  // distanceKm não é editável manualmente: sempre derivado das coordenadas do posto de coleta e do cliente final.
+  if (body.scheduledAt !== undefined) {
+    if (body.scheduledAt === null) {
+      data.scheduledAt = null;
+    } else {
+      const scheduledAt = new Date(body.scheduledAt);
+      if (!Number.isFinite(scheduledAt.getTime())) return response.status(400).json({ error: "Data/hora agendada inválida" });
+      data.scheduledAt = scheduledAt;
+    }
+  }
+  if (typeof body.status === "string") {
+    if (!freightRouteStatuses.includes(body.status)) return response.status(400).json({ error: "Status de rota inválido" });
+    if (["completed", "cancelled"].includes(route.status)) return response.status(409).json({ error: "Rotas concluídas ou canceladas não podem ser alteradas" });
+    data.status = body.status;
+  }
+
+  const updated = await prisma.$transaction(async (transaction) => {
+    const updatedRoute = await transaction.freightRoute.update({ where: { id: route.id }, data });
+    if (["completed", "cancelled"].includes(data.status)) {
+      await transaction.freightRouteAssignment.updateMany({
+        where: { routeId: route.id, status: "active" },
+        data: { status: data.status === "completed" ? "completed" : "cancelled", endedAt: new Date() },
+      });
+    }
+    return transaction.freightRoute.findUnique({ where: { id: route.id }, include: freightRouteInclude });
+  });
+  broadcast("freight-route-updated");
+  response.json({ route: publicFreightRoute(updated) });
+});
+
+app.post("/api/freight-routes/:routeId/assign", auth, requireOperations, async (request, response) => {
+  const route = await prisma.freightRoute.findUnique({ where: { id: request.params.routeId } });
+  if (!route) return response.status(404).json({ error: "Rota não encontrada" });
+  if (!freightRouteOpenStatuses.includes(route.status)) return response.status(409).json({ error: "Esta rota não aceita novos motoristas" });
+
+  const body = request.body || {};
+  const driverId = typeof body.driverId === "string" ? body.driverId : "";
+  if (!driverId) return response.status(400).json({ error: "Motorista é obrigatório" });
+
+  const driver = await prisma.driver.findUnique({
+    where: { id: driverId },
+    include: { vehicleAssignments: { where: { endedAt: null }, include: { vehicle: true }, orderBy: { startedAt: "desc" }, take: 1 } },
+  });
+  if (!driver) return response.status(404).json({ error: "Motorista não encontrado" });
+  if (driver.homologationStatus !== "active") return response.status(409).json({ error: "Motorista precisa estar homologado para assumir rotas" });
+
+  // Capacidade sempre vem do cadastro do motorista (ou do veículo vinculado a ele), nunca digitada manualmente pelo despachante.
+  const capacity = driver.capacity?.trim() || driver.vehicleAssignments?.[0]?.vehicle?.capacity?.trim() || "";
+  if (!capacity) return response.status(409).json({ error: "Motorista não possui capacidade cadastrada. Atualize o cadastro antes de vinculá-lo à rota" });
+
+  try {
+    const assignment = await prisma.$transaction(async (transaction) => {
+      const existingActive = await transaction.freightRouteAssignment.findFirst({ where: { driverId, status: "active" } });
+      if (existingActive) throw new Error("EXISTING_ACTIVE_ROUTE");
+      const created = await transaction.freightRouteAssignment.create({
+        data: { routeId: route.id, driverId, capacity },
+      });
+      await transaction.freightRoute.update({
+        where: { id: route.id },
+        data: { status: route.status === "open" ? "assigned" : route.status, totalCapacity: capacity },
+      });
+      return created;
+    });
+    broadcast("freight-route-assigned");
+    const updated = await prisma.freightRoute.findUnique({ where: { id: route.id }, include: freightRouteInclude });
+    response.status(201).json({ route: publicFreightRoute(updated), assignment_id: assignment.id });
+  } catch (error) {
+    if (error instanceof Error && error.message === "EXISTING_ACTIVE_ROUTE") {
+      return response.status(409).json({ error: "Este motorista já possui uma rota ativa no momento" });
+    }
+    response.status(400).json({ error: "Não foi possível vincular o motorista a esta rota" });
+  }
+});
+
+app.patch("/api/freight-routes/:routeId/assignments/:assignmentId", auth, async (request, response) => {
+  const assignment = await prisma.freightRouteAssignment.findFirst({ where: { id: request.params.assignmentId, routeId: request.params.routeId } });
+  if (!assignment) return response.status(404).json({ error: "Vínculo de rota não encontrado" });
+  const isSelfDriver = request.user.driver?.id === assignment.driverId;
+  if (!isSelfDriver && !isOperationsUser(request)) return response.status(403).json({ error: "Você não participa deste vínculo de rota" });
+  if (assignment.status !== "active") return response.status(409).json({ error: "Este vínculo já foi encerrado" });
+
+  const status = request.body?.status;
+  if (!["completed", "cancelled"].includes(status)) return response.status(400).json({ error: "Informe um status de encerramento válido" });
+
+  await prisma.freightRouteAssignment.update({ where: { id: assignment.id }, data: { status, endedAt: new Date() } });
+  const route = await prisma.freightRoute.findUnique({ where: { id: assignment.routeId }, include: freightRouteInclude });
+  const stillActive = route.assignments.some((item) => item.status === "active");
+  if (!stillActive && ["assigned", "in_progress"].includes(route.status)) {
+    await prisma.freightRoute.update({ where: { id: route.id }, data: { status: "open" } });
+  }
+  broadcast("freight-route-assignment-updated");
+  const updated = await prisma.freightRoute.findUnique({ where: { id: assignment.routeId }, include: freightRouteInclude });
+  response.json({ route: publicFreightRoute(updated) });
+});
+
+// Dashboard do motorista: somente as rotas atribuídas a ele mesmo (nunca a lista geral de rotas).
+app.get("/api/driver/routes", auth, async (request, response) => {
+  if (!request.user.driver) return response.status(404).json({ error: "Motorista ainda não cadastrado" });
+  const driverId = request.user.driver.id;
+  const routes = await prisma.freightRoute.findMany({
+    where: { assignments: { some: { driverId } } },
+    include: freightRouteInclude,
+    orderBy: { updatedAt: "desc" },
+  });
+  response.json({
+    routes: routes.map((route) => {
+      const mine = route.assignments.find((assignment) => assignment.driverId === driverId) || null;
+      return {
+        ...publicFreightRoute(route),
+        my_assignment: mine ? { id: mine.id, capacity: mine.capacity, status: mine.status } : null,
+      };
+    }),
+  });
+});
+
 const distPath = path.resolve(process.cwd(), "dist");
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
@@ -1496,6 +1884,16 @@ if (fs.existsSync(distPath)) {
     response.sendFile(path.join(distPath, "index.html"));
   });
 }
+
+// Rede de segurança: qualquer erro não tratado em rota /api deve virar JSON, nunca a página HTML padrão do Express.
+app.use((error, request, response, next) => {
+  if (response.headersSent) return next(error);
+  console.error(error);
+  if (request.path.startsWith("/api")) {
+    return response.status(500).json({ error: "Erro interno do servidor" });
+  }
+  next(error);
+});
 
 await ensureSystemAdmin();
 

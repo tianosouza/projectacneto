@@ -17,7 +17,6 @@ import {
   UserPlus,
   Users,
   MapPin,
-  IdCard,
   CalendarDays,
   ArrowRight,
   MessageCircle,
@@ -36,6 +35,7 @@ import type {
   DemoContact,
   DemoDriver,
   DirectoryOperator,
+  OperationalLocation,
   PendingUser,
 } from "@/lib/dashboardTypes";
 import {
@@ -57,6 +57,7 @@ import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { SettingsMenu } from "@/components/SettingsMenu";
 import { NegotiationsPanel } from "@/components/NegotiationsPanel";
 import { FinancePanel } from "@/components/FinancePanel";
+import { RoutesPanel } from "@/components/RoutesPanel";
 import { apiEventSource, apiFetch } from "@/lib/api";
 
 function App() {
@@ -222,23 +223,13 @@ function CarrierDashboard({
     if (mapResponse.ok) {
       const body = (await mapResponse.json()) as {
         drivers: DemoDriver[];
-        locations: Array<{
-          id: string;
-          kind: "collection_point" | "final_customer";
-          name: string;
-          email: string | null;
-          phone: string | null;
-          address: string | null;
-          city: string | null;
-          state: string | null;
-          latitude: number | null;
-          longitude: number | null;
-        }>;
+        locations: OperationalLocation[];
       };
       setMapDrivers(body.drivers);
       setMapLocations(
         body.locations.map((location) => ({
           ...location,
+          email: location.email ?? "",
           region: location.city ?? location.state ?? "",
           accessLevel: "cliente",
           status: "ativo",
@@ -799,116 +790,6 @@ function CarrierLocationMap({
   );
 }
 
-function CarrierLocationMapLegacy({
-  drivers,
-  locations,
-}: {
-  drivers: DemoDriver[];
-  locations: DemoContact[];
-}) {
-  const locatedDrivers = drivers.filter(
-    (driver) =>
-      isDriverCurrentlyOnline(driver) &&
-      Number.isFinite(driver.latitude) &&
-      Number.isFinite(driver.longitude),
-  );
-  const locatedClients = locations.filter(
-    (location) =>
-      Number.isFinite(location.latitude) && Number.isFinite(location.longitude),
-  );
-
-  return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-col gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <MapPin size={18} className="text-[#1052c7]" />
-            <h2 className="text-lg font-bold text-[#0b1d3a]">
-              Motoristas e pontos liberados
-            </h2>
-          </div>
-          <p className="mt-1 text-sm text-slate-500">
-            Exibe somente motoristas disponíveis da sua transportadora e locais
-            autorizados pela operação.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
-          <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">
-            {locatedDrivers.length} motorista(s) disponíveis
-          </span>
-          <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">
-            {locatedClients.length} ponto(s) liberado(s)
-          </span>
-        </div>
-      </div>
-      {locatedDrivers.length === 0 && locatedClients.length === 0 ? (
-        <div className="flex min-h-80 items-center justify-center p-6 text-center text-sm text-slate-500">
-          Nenhum motorista disponível ou ponto liberado com localização
-          disponível.
-        </div>
-      ) : (
-        <MapContainer
-          center={[-14.235, -51.925]}
-          zoom={4}
-          scrollWheelZoom
-          className="h-[min(68vh,560px)] min-h-[360px] w-full"
-        >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          {locatedDrivers.map((driver) => (
-            <Marker
-              key={`driver-${driver.id}`}
-              position={[driver.latitude as number, driver.longitude as number]}
-              icon={carrierDriverIcon()}
-            >
-              <Popup>
-                <strong>{driver.full_name}</strong>
-                <br />
-                Motorista disponível
-                {driver.vehicle_model ? ` · ${driver.vehicle_model}` : ""}
-              </Popup>
-            </Marker>
-          ))}
-          {locatedClients.map((location) => (
-            <Marker
-              key={`location-${location.id}`}
-              position={[
-                location.latitude as number,
-                location.longitude as number,
-              ]}
-              icon={clientMarkerIcon(location.kind)}
-            >
-              <Popup>
-                <strong>{location.name}</strong>
-                <br />
-                {location.kind === "collection_point"
-                  ? "Posto de coleta"
-                  : "Cliente final"}
-                {location.city ? ` · ${location.city}` : ""}
-              </Popup>
-            </Marker>
-          ))}
-        </MapContainer>
-      )}
-    </section>
-  );
-}
-
-function carrierDriverIcon() {
-  return divIcon({
-    className: "carrier-driver-marker",
-    iconSize: [38, 38],
-    iconAnchor: [19, 19],
-    html: renderToStaticMarkup(
-      <div className="flex h-[38px] w-[38px] items-center justify-center rounded-full border-2 border-white bg-emerald-600 text-white shadow-lg">
-        <Users size={19} />
-      </div>,
-    ),
-  });
-}
-
 function RoleDashboard({
   role,
   title,
@@ -1040,6 +921,7 @@ function RoleDashboard({
     | "cadastros"
     | "localizacao"
     | "negociacoes"
+    | "rotas"
     | "financeiro"
     | "modulos"
     | "conta"
@@ -1288,18 +1170,7 @@ function RoleDashboard({
                 driverId: string;
                 status: string;
               }>;
-              locations: Array<{
-                id: string;
-                kind: "collection_point" | "final_customer";
-                name: string;
-                email: string | null;
-                phone: string | null;
-                address: string | null;
-                city: string | null;
-                state: string | null;
-                latitude: number | null;
-                longitude: number | null;
-              }>;
+              locations: OperationalLocation[];
             }>,
         )
         .then(
@@ -1396,18 +1267,7 @@ function RoleDashboard({
                   driverId: string;
                   status: string;
                 }>;
-                locations: Array<{
-                  id: string;
-                  kind: "collection_point" | "final_customer";
-                  name: string;
-                  email: string | null;
-                  phone: string | null;
-                  address: string | null;
-                  city: string | null;
-                  state: string | null;
-                  latitude: number | null;
-                  longitude: number | null;
-                }>;
+                locations: OperationalLocation[];
               }>,
           )
           .then(
@@ -2447,7 +2307,6 @@ function RoleDashboard({
             <SettingsMenu onSignOut={onSignOut} />
           </div>
         </header>
-
         <section
           className={`mb-6 grid gap-4 ${role === "admin" ? "md:grid-cols-4" : "md:grid-cols-3"}`}
         >
@@ -2484,9 +2343,8 @@ function RoleDashboard({
             />
           )}
         </section>
-
         <div
-          className={`mb-6 grid gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 ${role === "admin" || role === "operator" ? (isSuperAdmin ? "grid-cols-2 sm:grid-cols-4 lg:grid-cols-8" : "grid-cols-2 sm:grid-cols-4 lg:grid-cols-7") : "grid-cols-2 sm:grid-cols-4"}`}
+          className={`mb-6 grid gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 ${role === "admin" || role === "operator" ? (isSuperAdmin ? "grid-cols-2 sm:grid-cols-4 lg:grid-cols-9" : "grid-cols-2 sm:grid-cols-4 lg:grid-cols-8") : "grid-cols-2 sm:grid-cols-4"}`}
         >
           <button
             onClick={() => setTab("resumo")}
@@ -2568,6 +2426,18 @@ function RoleDashboard({
           )}
           {(role === "admin" || role === "operator") && (
             <button
+              onClick={() => setTab("rotas")}
+              className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
+                tab === "rotas"
+                  ? "bg-white text-[#0b1d3a] shadow-sm"
+                  : "text-slate-500"
+              }`}
+            >
+              Rotas
+            </button>
+          )}
+          {(role === "admin" || role === "operator") && (
+            <button
               onClick={() => setTab("solicitacoes")}
               className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
                 tab === "solicitacoes"
@@ -2583,8 +2453,7 @@ function RoleDashboard({
               )}
             </button>
           )}
-        </div>
-
+        </div>{" "}
         {tab === "resumo" ? (
           <>
             <ReusableDirectorySearch
@@ -3346,6 +3215,11 @@ function RoleDashboard({
             selectedClientIds={selectedClientIds}
             routeDistanceKm={routeSummary ? routeSummary.distance / 1000 : null}
           />
+        ) : tab === "rotas" ? (
+          <RoutesPanel
+            drivers={directoryDrivers.length ? directoryDrivers : drivers}
+            clients={clients}
+          />
         ) : tab === "modulos" && isSuperAdmin ? (
           <section className="space-y-5">
             <div>
@@ -3592,175 +3466,6 @@ function PendingVehiclesPanel({
                 >
                   Aprovar
                 </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-export function RegistrationRequestsPanel({
-  requests,
-  approvalRoles,
-  approvalDriverFields,
-  onRoleChange,
-  onDriverFieldChange,
-  onApprove,
-  onClose,
-  onReopen,
-}: {
-  requests: PendingUser[];
-  approvalRoles: Record<
-    string,
-    "driver" | "carrier" | "client" | "operator" | "admin"
-  >;
-  approvalDriverFields: Record<string, ApprovalDriverFields>;
-  onRoleChange: (
-    userId: string,
-    value: "driver" | "carrier" | "client" | "operator" | "admin",
-  ) => void;
-  onDriverFieldChange: (
-    userId: string,
-    field: keyof ApprovalDriverFields,
-    value: string,
-  ) => void;
-  onApprove: (request: PendingUser) => void;
-  onClose: (userId: string) => void;
-  onReopen: (userId: string) => void;
-}) {
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-5 flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-bold text-[#0b1d3a]">
-            Solicitações de cadastro
-          </h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Consulte solicitações abertas e encerradas para uma nova análise.
-          </p>
-        </div>
-        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
-          {requests.length}
-        </span>
-      </div>
-      {requests.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-          Nenhuma solicitação registrada.
-        </p>
-      ) : (
-        <div className="space-y-3">
-          {requests.map((request) => (
-            <div
-              key={request.id}
-              className="flex flex-col gap-3 rounded-xl border border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div>
-                <p className="font-semibold text-[#0b1d3a]">
-                  {request.full_name || "Nome não informado"}
-                </p>
-                <p className="text-xs text-slate-500">
-                  {request.email} · {request.phone || "Telefone não informado"}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Solicitação para{" "}
-                  {request.requested_role === "operator"
-                    ? "operador"
-                    : "motorista"}{" "}
-                  · {new Date(request.created_at).toLocaleString("pt-BR")}
-                </p>
-                {request.registration_notes && (
-                  <p className="mt-2 text-sm text-slate-600">
-                    {request.registration_notes}
-                  </p>
-                )}
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <span
-                  className={`rounded-full px-2.5 py-1 text-xs font-bold ${request.approval_closed ? "bg-slate-100 text-slate-600" : "bg-amber-50 text-amber-700"}`}
-                >
-                  {request.approval_closed ? "Fechada" : "Em análise"}
-                </span>
-                {!request.approval_closed &&
-                  (approvalRoles[request.id] ?? request.requested_role) ===
-                    "driver" && (
-                    <div className="grid w-full gap-2 sm:absolute sm:mt-48 sm:grid-cols-2">
-                      {(
-                        [
-                          ["full_name", "Nome completo"],
-                          ["phone", "Telefone"],
-                          ["vehicle_model", "Veículo"],
-                          ["plate", "Placa"],
-                          ["city", "Cidade"],
-                          ["state", "UF"],
-                          ["capacity", "Capacidade"],
-                          ["compartments", "Compartimentação"],
-                        ] as const
-                      ).map(([field, placeholder]) => (
-                        <input
-                          key={field}
-                          value={
-                            approvalDriverFields[request.id]?.[field] ?? ""
-                          }
-                          onChange={(event) =>
-                            onDriverFieldChange(
-                              request.id,
-                              field,
-                              event.target.value,
-                            )
-                          }
-                          placeholder={`${placeholder} *`}
-                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                        />
-                      ))}
-                    </div>
-                  )}
-                {!request.approval_closed && (
-                  <>
-                    <select
-                      value={
-                        approvalRoles[request.id] ?? request.requested_role
-                      }
-                      onChange={(event) =>
-                        onRoleChange(
-                          request.id,
-                          event.target.value as "driver" | "operator" | "admin",
-                        )
-                      }
-                      className="rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-700"
-                      aria-label={`Perfil de ${request.full_name ?? request.email}`}
-                    >
-                      <option value="driver">Motorista</option>
-                      <option value="operator">Operador</option>
-                      <option value="admin">Administrador</option>
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => onApprove(request)}
-                      className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
-                    >
-                      Aprovar cadastro
-                    </button>
-                  </>
-                )}
-                {request.approval_closed ? (
-                  <button
-                    type="button"
-                    onClick={() => onReopen(request.id)}
-                    className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
-                  >
-                    Reabrir
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => onClose(request.id)}
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    Fechar aprovação
-                  </button>
-                )}
               </div>
             </div>
           ))}

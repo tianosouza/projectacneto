@@ -26,6 +26,7 @@ model User {
   negotiationOffers FreightNegotiationOffer[]
   negotiationMessages FreightNegotiationMessage[]
   reviewedWalletEntries DriverWalletEntry[] @relation("WalletReview")
+  createdFreightRoutes FreightRoute[] @relation("FreightRouteCreator")
 }
 
 model Profile {
@@ -106,6 +107,7 @@ model Driver {
   documents HomologationDocument[]
   negotiations FreightNegotiation[]
   walletEntries DriverWalletEntry[]
+  routeAssignments FreightRouteAssignment[]
 
   @@index([status])
   @@index([isOnline])
@@ -131,6 +133,8 @@ model OperationalLocation {
   collectionNegotiations FreightNegotiation[] @relation("CollectionNegotiations")
   customerNegotiations   FreightNegotiation[] @relation("CustomerNegotiations")
   companyAccesses        OperationalLocationCompanyAccess[]
+  collectionRoutes       FreightRoute[] @relation("FreightRouteCollectionPoint")
+  customerRoutes         FreightRoute[] @relation("FreightRouteFinalCustomer")
 
   @@index([kind, active])
   @@index([city, state])
@@ -346,6 +350,49 @@ model HomologationDocument {
   @@index([driverId, status])
   @@index([vehicleId, status])
   @@index([companyId, status])
+}
+
+// Rota de transporte: pode ter vários motoristas ao longo do tempo (histórico),
+// mas cada motorista só pode ter um vínculo (assignment) ativo por vez.
+model FreightRoute {
+  id                String    @id @default(cuid())
+  createdByUserId   String
+  collectionPointId String
+  finalCustomerId   String
+  totalCapacity     String
+  cargo             String?
+  product           String?
+  notes             String?
+  distanceKm        Float?
+  status            String    @default("open") // open, assigned, in_progress, completed, cancelled
+  scheduledAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  createdBy       User                @relation("FreightRouteCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  collectionPoint OperationalLocation @relation("FreightRouteCollectionPoint", fields: [collectionPointId], references: [id], onDelete: Restrict)
+  finalCustomer   OperationalLocation @relation("FreightRouteFinalCustomer", fields: [finalCustomerId], references: [id], onDelete: Restrict)
+  assignments     FreightRouteAssignment[]
+
+  @@index([status, createdAt])
+  @@index([collectionPointId])
+  @@index([finalCustomerId])
+}
+
+model FreightRouteAssignment {
+  id         String    @id @default(cuid())
+  routeId    String
+  driverId   String
+  capacity   String?
+  status     String    @default("active") // active, completed, cancelled
+  acceptedAt DateTime  @default(now())
+  endedAt    DateTime?
+
+  route  FreightRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  driver Driver       @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([routeId, status])
+  @@index([driverId, status])
 }
 
 model DriverWalletEntry {

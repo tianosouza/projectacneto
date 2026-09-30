@@ -20,15 +20,23 @@ import {
   X,
   LogOut,
   Bell,
+  Route as RouteIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import type { Driver } from "@/lib/types";
+import type { FreightRoute } from "@/lib/dashboardTypes";
 import { AccountCenter } from "@/components/AccountCenter";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SettingsMenu } from "@/components/SettingsMenu";
 import { apiEventSource, apiFetch } from "@/lib/api";
 
-type Tab = "home" | "profile" | "history" | "negotiations" | "settings";
+type Tab =
+  | "home"
+  | "profile"
+  | "history"
+  | "negotiations"
+  | "routes"
+  | "settings";
 const accessToken = () => localStorage.getItem("acneto-access-token");
 const apiHeaders = () => ({
   "Content-Type": "application/json",
@@ -640,6 +648,7 @@ export function DriverPortal() {
         )}
         {tab === "history" && <WalletView />}
         {tab === "negotiations" && <DriverNegotiationsView />}
+        {tab === "routes" && <DriverRoutesView />}
         {tab === "settings" && <SettingsView onSignOut={signOut} />}
       </main>
 
@@ -1759,6 +1768,165 @@ function DriverNegotiationsView() {
   );
 }
 
+const driverRouteStatusLabels: Record<string, string> = {
+  open: "Aberta",
+  assigned: "Designada",
+  in_progress: "Em andamento",
+  completed: "Concluída",
+  cancelled: "Cancelada",
+};
+
+// Dashboard somente leitura: o motorista vê apenas as rotas atribuídas a ele.
+function DriverRoutesView() {
+  const [routes, setRoutes] = useState<
+    Array<
+      FreightRoute & {
+        my_assignment: {
+          id: string;
+          capacity: string | null;
+          status: string;
+        } | null;
+      }
+    >
+  >([]);
+  const [error, setError] = useState("");
+
+  const load = async () => {
+    const response = await apiFetch("/api/driver/routes", {
+      headers: apiHeaders(),
+    });
+    if (!response.ok) {
+      setError("Não foi possível carregar suas rotas.");
+      return;
+    }
+    const body = (await response.json()) as { routes: typeof routes };
+    setRoutes(body.routes);
+  };
+
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => void load(), 8000);
+    const token = accessToken();
+    const events = token
+      ? apiEventSource(`/api/events?token=${encodeURIComponent(token)}`)
+      : null;
+    const refreshOnEvent = () => void load();
+    events?.addEventListener("message", refreshOnEvent);
+    return () => {
+      window.clearInterval(timer);
+      events?.removeEventListener("message", refreshOnEvent);
+      events?.close();
+    };
+  }, []);
+
+  const endAssignment = async (
+    routeId: string,
+    assignmentId: string,
+    status: "completed" | "cancelled",
+  ) => {
+    const response = await apiFetch(
+      `/api/freight-routes/${routeId}/assignments/${assignmentId}`,
+      {
+        method: "PATCH",
+        headers: apiHeaders(),
+        body: JSON.stringify({ status }),
+      },
+    );
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string };
+      setError(body.error ?? "Não foi possível atualizar a rota.");
+      return;
+    }
+    await load();
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-600">
+          Minhas rotas
+        </p>
+        <h2 className="mt-1 text-xl font-bold text-[#0b1d3a]">
+          Rotas atribuídas a você
+        </h2>
+      </div>
+
+      {error && <p className="text-sm text-rose-600">{error}</p>}
+
+      {routes.map((route) => (
+        <div
+          key={route.id}
+          className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-bold text-[#0b1d3a]">
+                {route.collection_point?.name ?? "?"} →{" "}
+                {route.final_customer?.name ?? "?"}
+              </p>
+              <p className="mt-1 text-sm text-slate-500">
+                Capacidade:{" "}
+                {route.my_assignment?.capacity ?? route.total_capacity}
+                {route.distance_km
+                  ? ` · ${route.distance_km.toFixed(1)} km`
+                  : ""}
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">
+              {driverRouteStatusLabels[route.status] ?? route.status}
+            </span>
+          </div>
+
+          {(route.cargo || route.product || route.notes) && (
+            <div className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+              {route.cargo && <p>Carga: {route.cargo}</p>}
+              {route.product && <p>Produto: {route.product}</p>}
+              {route.notes && <p>Observações: {route.notes}</p>}
+            </div>
+          )}
+
+          {route.my_assignment?.status === "active" && (
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  void endAssignment(
+                    route.id,
+                    route.my_assignment!.id,
+                    "completed",
+                  )
+                }
+                className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700"
+              >
+                Concluir minha parte
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void endAssignment(
+                    route.id,
+                    route.my_assignment!.id,
+                    "cancelled",
+                  )
+                }
+                className="rounded-lg bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700"
+              >
+                Cancelar minha parte
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {!routes.length && (
+        <p className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-500">
+          Nenhuma rota atribuída a você no momento.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function SettingsView({ onSignOut }: { onSignOut: () => void }) {
   const items = [
     { icon: Settings, label: "Preferências da conta" },
@@ -1826,6 +1994,7 @@ function BottomNav({ tab, setTab }: { tab: Tab; setTab: (tab: Tab) => void }) {
     { key: "home", label: "Início", icon: Zap },
     { key: "profile", label: "Perfil", icon: User },
     { key: "history", label: "Carteira", icon: TrendingUp },
+    { key: "routes", label: "Rotas", icon: RouteIcon },
     { key: "negotiations", label: "Ofertas", icon: Bell },
     { key: "settings", label: "Ajustes", icon: Settings },
   ];
