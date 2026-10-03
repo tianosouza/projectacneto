@@ -25,6 +25,7 @@ import {
   UsersRound,
   Factory,
   Building2,
+  Database,
   Link2,
   Shield,
 } from "lucide-react";
@@ -55,10 +56,48 @@ import { DirectorySearch as ReusableDirectorySearch } from "@/components/Directo
 import { RegistrationRequestsPanel as ReusableRegistrationRequestsPanel } from "@/components/RegistrationRequestsPanel";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { SettingsMenu } from "@/components/SettingsMenu";
-import { NegotiationsPanel } from "@/components/NegotiationsPanel";
-import { FinancePanel } from "@/components/FinancePanel";
+import { DriverChat } from "@/components/DriverChat";
+import { DriverChatArchive } from "@/components/DriverChatArchive";
 import { RoutesPanel } from "@/components/RoutesPanel";
+import { SuperAdminDataManager } from "@/components/SuperAdminDataManager";
 import { apiEventSource, apiFetch } from "@/lib/api";
+
+const brazilianStates = [
+  ["AC", "Acre"],
+  ["AL", "Alagoas"],
+  ["AP", "Amapá"],
+  ["AM", "Amazonas"],
+  ["BA", "Bahia"],
+  ["CE", "Ceará"],
+  ["DF", "Distrito Federal"],
+  ["ES", "Espírito Santo"],
+  ["GO", "Goiás"],
+  ["MA", "Maranhão"],
+  ["MT", "Mato Grosso"],
+  ["MS", "Mato Grosso do Sul"],
+  ["MG", "Minas Gerais"],
+  ["PA", "Pará"],
+  ["PB", "Paraíba"],
+  ["PR", "Paraná"],
+  ["PE", "Pernambuco"],
+  ["PI", "Piauí"],
+  ["RJ", "Rio de Janeiro"],
+  ["RN", "Rio Grande do Norte"],
+  ["RS", "Rio Grande do Sul"],
+  ["RO", "Rondônia"],
+  ["RR", "Roraima"],
+  ["SC", "Santa Catarina"],
+  ["SP", "São Paulo"],
+  ["SE", "Sergipe"],
+  ["TO", "Tocantins"],
+] as const;
+
+const normalizeGeocodeText = (value: string) =>
+  value
+    .trim()
+    .toLocaleLowerCase("pt-BR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 
 function App() {
   const { user, profile, loading, signOut } = useAuth();
@@ -101,8 +140,6 @@ function App() {
         subtitle="Painel de operação"
         accountUser={user}
         accountProfile={profile}
-        financeEnabled={profile?.finance_enabled === true}
-        negotiationsEnabled={profile?.negotiations_enabled === true}
         isSuperAdmin={profile?.is_super_admin === true}
         onSignOut={signOut}
       />
@@ -117,8 +154,6 @@ function App() {
         subtitle="Painel administrativo"
         accountUser={user}
         accountProfile={profile}
-        financeEnabled={profile?.finance_enabled === true}
-        negotiationsEnabled={profile?.negotiations_enabled === true}
         isSuperAdmin={profile?.is_super_admin === true}
         onSignOut={signOut}
       />
@@ -783,8 +818,6 @@ function CarrierLocationMap({
       statusFilter={statusFilter}
       setStatusFilter={setStatusFilter}
       onSelectDriver={setSelectedDriverId}
-      onOpenNegotiation={() => undefined}
-      canOpenNegotiation={false}
       showRoutePanel={false}
     />
   );
@@ -796,8 +829,6 @@ function RoleDashboard({
   subtitle,
   accountUser,
   accountProfile,
-  financeEnabled,
-  negotiationsEnabled,
   isSuperAdmin,
   onSignOut,
 }: {
@@ -810,8 +841,6 @@ function RoleDashboard({
     user_metadata: { full_name?: string };
   };
   accountProfile: { role: string; created_at: string } | null;
-  financeEnabled: boolean;
-  negotiationsEnabled: boolean;
   isSuperAdmin: boolean;
   onSignOut: () => Promise<void>;
 }) {
@@ -825,6 +854,7 @@ function RoleDashboard({
   const [email, setEmail] = useState("");
   const [locationPhone, setLocationPhone] = useState("");
   const [region, setRegion] = useState("");
+  const [locationState, setLocationState] = useState("");
   const [locationKind, setLocationKind] = useState<
     "collection_point" | "final_customer"
   >("final_customer");
@@ -837,12 +867,6 @@ function RoleDashboard({
     "drivers" | "vehicles" | "companies" | "operators" | "admins" | "clients"
   >(role === "admin" ? "admins" : "drivers");
   const [initialAccessPassword, setInitialAccessPassword] = useState("");
-  const [financeEnabledForNewOperator, setFinanceEnabledForNewOperator] =
-    useState(false);
-  const [
-    negotiationsEnabledForNewOperator,
-    setNegotiationsEnabledForNewOperator,
-  ] = useState(false);
   const [drivers, setDrivers] = useState<DemoDriver[]>(() =>
     getOnlineDrivers(),
   );
@@ -850,18 +874,6 @@ function RoleDashboard({
     DirectoryOperator[]
   >([]);
   const [directoryDrivers, setDirectoryDrivers] = useState<DemoDriver[]>([]);
-  const [activeNegotiations, setActiveNegotiations] = useState(0);
-  const [moduleUsers, setModuleUsers] = useState<
-    Array<{
-      id: string;
-      name: string;
-      email: string;
-      role: string;
-      is_super_admin: boolean;
-      finance_enabled: boolean;
-      negotiations_enabled: boolean;
-    }>
-  >([]);
   const [passwordResetValues, setPasswordResetValues] = useState<
     Record<string, string>
   >({});
@@ -920,12 +932,10 @@ function RoleDashboard({
     | "resumo"
     | "cadastros"
     | "localizacao"
-    | "negociacoes"
     | "rotas"
-    | "financeiro"
-    | "modulos"
     | "conta"
     | "solicitacoes"
+    | "dados"
   >("resumo");
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [selectedClientIds, setSelectedClientIds] = useState<string[]>([]);
@@ -983,98 +993,9 @@ function RoleDashboard({
 
   const showFormError = (message: string) => setFormError(message);
 
-  const toggleOperatorModule = async (
-    operator: DemoContact,
-    module: "finance" | "negotiations",
-  ) => {
-    if (role !== "admin") return;
-    const enabled =
-      module === "finance"
-        ? operator.financeEnabled
-        : operator.negotiationsEnabled;
-    const response = await apiFetch(`/api/admin/users/${operator.id}/module`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
-      },
-      body: JSON.stringify({ module, enabled: !enabled }),
-    });
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string };
-      showFormError(body.error ?? "Não foi possível atualizar o módulo.");
-      return;
-    }
-    setOperators((current) =>
-      current.map((item) =>
-        item.id === operator.id
-          ? {
-              ...item,
-              ...(module === "finance"
-                ? { financeEnabled: !enabled }
-                : { negotiationsEnabled: !enabled }),
-            }
-          : item,
-      ),
-    );
-  };
-
   useEffect(() => {
     saveList("acneto-clients", clients);
   }, [clients]);
-
-  useEffect(() => {
-    if (tab === "negociacoes" && !(isSuperAdmin || negotiationsEnabled)) {
-      setTab("resumo");
-    }
-    if (tab === "financeiro" && !(isSuperAdmin || financeEnabled)) {
-      setTab("resumo");
-    }
-  }, [financeEnabled, isSuperAdmin, negotiationsEnabled, role, tab]);
-
-  useEffect(() => {
-    if (!isSuperAdmin) return;
-    const loadModuleUsers = async () => {
-      const response = await apiFetch("/api/admin/module-users", {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
-        },
-      });
-      if (response.ok)
-        setModuleUsers(
-          ((await response.json()) as { users: typeof moduleUsers }).users,
-        );
-    };
-    void loadModuleUsers();
-  }, [isSuperAdmin]);
-
-  const toggleModuleUser = async (
-    userId: string,
-    module: "finance" | "negotiations",
-    enabled: boolean,
-  ) => {
-    const response = await apiFetch(`/api/admin/users/${userId}/module`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
-      },
-      body: JSON.stringify({ module, enabled: !enabled }),
-    });
-    if (!response.ok) return;
-    setModuleUsers((current) =>
-      current.map((user) =>
-        user.id === userId
-          ? {
-              ...user,
-              ...(module === "finance"
-                ? { finance_enabled: !enabled }
-                : { negotiations_enabled: !enabled }),
-            }
-          : user,
-      ),
-    );
-  };
 
   const resetUserPassword = async (userId: string) => {
     const password = passwordResetValues[userId] ?? "";
@@ -1102,26 +1023,6 @@ function RoleDashboard({
       "Senha alterada. O usuário deverá trocá-la no próximo acesso.",
     );
   };
-
-  useEffect(() => {
-    const loadNegotiationCount = async () => {
-      const token = localStorage.getItem("acneto-access-token");
-      if (!token) return;
-      const response = await apiFetch("/api/negotiations", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) return;
-      const body = (await response.json()) as {
-        negotiations: Array<{ status: string }>;
-      };
-      setActiveNegotiations(
-        body.negotiations.filter((item) => item.status !== "completed").length,
-      );
-    };
-    void loadNegotiationCount();
-    const timer = window.setInterval(() => void loadNegotiationCount(), 5000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     saveList("acneto-operators", operators);
@@ -1205,8 +1106,6 @@ function RoleDashboard({
                 phone: operator.phone,
                 region: "",
                 accessLevel: "operador" as const,
-                financeEnabled: operator.finance_enabled === true,
-                negotiationsEnabled: operator.negotiations_enabled === true,
                 status: "ativo" as const,
                 latitude: null,
                 longitude: null,
@@ -1303,8 +1202,6 @@ function RoleDashboard({
                   phone: operator.phone,
                   region: "",
                   accessLevel: "operador" as const,
-                  financeEnabled: operator.finance_enabled === true,
-                  negotiationsEnabled: operator.negotiations_enabled === true,
                   status: "ativo" as const,
                   latitude: null,
                   longitude: null,
@@ -1806,18 +1703,6 @@ function RoleDashboard({
     }
   };
 
-  const openNegotiation = async () => {
-    if (!(isSuperAdmin || negotiationsEnabled)) {
-      setRouteError(
-        "O módulo de negociações não está liberado para este usuário.",
-      );
-      return;
-    }
-    const calculated = await calculateRoute();
-    if (!calculated) return;
-    setTab("negociacoes");
-  };
-
   useEffect(() => {
     if (!filteredDrivers.length) {
       setSelectedDriverId((current) => (current === null ? current : null));
@@ -1851,26 +1736,168 @@ function RoleDashboard({
     }
   }, [selectedClientIds.length, selectedDriverId]);
 
-  const geocodeAddress = async (address: string, city: string) => {
-    const query = [address, city].filter(Boolean).join(", ");
-    if (!query) return null;
+  const geocodeAddress = async (
+    address: string,
+    city: string,
+    state: string,
+  ) => {
+    const normalizedState = state.trim().toUpperCase();
+    const stateName = brazilianStates.find(
+      ([code]) => code === normalizedState,
+    )?.[1];
+    if (!address.trim() || !city.trim() || !stateName) return null;
+
+    const params = new URLSearchParams({
+      format: "jsonv2",
+      limit: "5",
+      addressdetails: "1",
+      countrycodes: "br",
+      street: address.trim(),
+      city: city.trim(),
+      state: stateName,
+      country: "Brasil",
+    });
 
     try {
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`,
+        `https://nominatim.openstreetmap.org/search?${params.toString()}`,
+        { headers: { Accept: "application/json", "Accept-Language": "pt-BR" } },
       );
       if (!response.ok) return null;
 
       const results = (await response.json()) as Array<{
         lat?: string;
         lon?: string;
+        address?: {
+          city?: string;
+          town?: string;
+          municipality?: string;
+          village?: string;
+          state?: string;
+          state_code?: string;
+          "ISO3166-2-lvl4"?: string;
+          road?: string;
+          house_number?: string;
+        };
+        display_name?: string;
+        addresstype?: string;
       }>;
-      const match = results[0];
-      if (!match?.lat || !match?.lon) return null;
+      const requestedCity = normalizeGeocodeText(city);
+      const requestedNumber = address.match(/\b\d+[a-zA-Z]?\b/)?.[0] ?? "";
+      const addressWords = normalizeGeocodeText(address)
+        .split(/[^a-z0-9]+/)
+        .filter((word) => word.length >= 4 && !/^\d+$/.test(word));
+      const locationMatches = (
+        resultCity: string,
+        resultState: string | undefined,
+      ) => {
+        const cityMatch =
+          normalizeGeocodeText(resultCity) === requestedCity ||
+          normalizeGeocodeText(resultCity).includes(requestedCity) ||
+          requestedCity.includes(normalizeGeocodeText(resultCity));
+        const stateMatch =
+          resultState === normalizedState ||
+          normalizeGeocodeText(resultState ?? "") ===
+            normalizeGeocodeText(stateName);
+        return cityMatch && stateMatch;
+      };
+      const nominatimMatch = results.find((result) => {
+        const resultCity =
+          result.address?.city ??
+          result.address?.town ??
+          result.address?.municipality ??
+          result.address?.village ??
+          "";
+        const resultStreet = normalizeGeocodeText(result.address?.road ?? "");
+        const streetMatch = addressWords.every((word) =>
+          resultStreet.includes(word),
+        );
+        const resultStateParts = (
+          result.address?.state_code ??
+          result.address?.["ISO3166-2-lvl4"] ??
+          ""
+        ).split("-");
+        const resultStateCode =
+          resultStateParts[resultStateParts.length - 1]?.toUpperCase();
+        return (
+          Number.isFinite(Number(result.lat)) &&
+          Number.isFinite(Number(result.lon)) &&
+          locationMatches(
+            resultCity,
+            resultStateCode ?? result.address?.state,
+          ) &&
+          streetMatch
+        );
+      });
+      if (nominatimMatch?.lat && nominatimMatch.lon) {
+        const matchedNumber = nominatimMatch.address?.house_number ?? "";
+        return {
+          latitude: Number(nominatimMatch.lat),
+          longitude: Number(nominatimMatch.lon),
+          approximate:
+            Boolean(requestedNumber) &&
+            matchedNumber !== requestedNumber &&
+            nominatimMatch.addresstype !== "house",
+          matchedAddress: nominatimMatch.display_name ?? address,
+        };
+      }
+
+      const photonParams = new URLSearchParams({
+        q: `${address.trim()}, ${city.trim()}, ${stateName}, Brasil`,
+        limit: "5",
+      });
+      const photonResponse = await fetch(
+        `https://photon.komoot.io/api/?${photonParams.toString()}`,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!photonResponse.ok) return null;
+      const photonBody = (await photonResponse.json()) as {
+        features?: Array<{
+          geometry?: { coordinates?: number[] };
+          properties?: {
+            countrycode?: string;
+            city?: string;
+            district?: string;
+            state?: string;
+            name?: string;
+            street?: string;
+            housenumber?: string;
+            osm_key?: string;
+          };
+        }>;
+      };
+      const photonMatch = (photonBody.features ?? []).find((feature) => {
+        const properties = feature.properties;
+        if (!properties || properties.countrycode?.toUpperCase() !== "BR")
+          return false;
+        const resultCity = properties.city ?? properties.district ?? "";
+        if (!locationMatches(resultCity, properties.state)) return false;
+        const matchedStreet = normalizeGeocodeText(
+          `${properties.name ?? ""} ${properties.street ?? ""}`,
+        );
+        const matchedStreetWords = addressWords.filter((word) =>
+          matchedStreet.includes(word),
+        ).length;
+        return (
+          addressWords.length > 0 &&
+          matchedStreetWords >= Math.min(2, addressWords.length)
+        );
+      });
+      const photonCoordinates = photonMatch?.geometry?.coordinates;
+      if (
+        !photonCoordinates ||
+        !Number.isFinite(photonCoordinates[0]) ||
+        !Number.isFinite(photonCoordinates[1])
+      )
+        return null;
 
       return {
-        latitude: Number(match.lat),
-        longitude: Number(match.lon),
+        latitude: photonCoordinates[1],
+        longitude: photonCoordinates[0],
+        approximate:
+          Boolean(requestedNumber) &&
+          photonMatch.properties?.housenumber !== requestedNumber,
+        matchedAddress: `${photonMatch.properties?.name ?? address}, ${city}, ${stateName}`,
       };
     } catch {
       return null;
@@ -1904,11 +1931,6 @@ function RoleDashboard({
           phone: region.trim(),
           role: requestedAccessLevel === "operador" ? "operator" : "admin",
           initialPassword: initialAccessPassword,
-          financeEnabled:
-            requestedAccessLevel === "operador" && financeEnabledForNewOperator,
-          negotiationsEnabled:
-            requestedAccessLevel === "operador" &&
-            negotiationsEnabledForNewOperator,
         }),
       });
       if (!response.ok) {
@@ -1920,8 +1942,6 @@ function RoleDashboard({
       setEmail("");
       setRegion("");
       setInitialAccessPassword("");
-      setFinanceEnabledForNewOperator(false);
-      setNegotiationsEnabledForNewOperator(false);
       setFormSuccess(
         requestedAccessLevel === "admin"
           ? "Administrador criado com sucesso. Ele deverá trocar a senha no primeiro acesso."
@@ -1930,65 +1950,140 @@ function RoleDashboard({
       return;
     }
 
-    if (
-      requestedAccessLevel === "cliente" &&
-      localStorage.getItem("acneto-access-token")
-    ) {
+    if (requestedAccessLevel === "cliente") {
       const addressText = locationAddress.trim();
       const cityText = region.trim();
+      const stateText = locationState.trim().toUpperCase();
 
       if (!locationPhone.trim()) {
         showFormError("Informe o WhatsApp do cliente ou posto de coleta.");
         return;
       }
 
-      if (!addressText) {
+      if (!addressText || !cityText || !stateText) {
         showFormError(
-          "Informe o endereço completo do cliente antes de salvar.",
+          "Informe endereço, cidade e UF para localizar o ponto corretamente.",
         );
         return;
       }
 
-      const coordinates = await geocodeAddress(addressText, cityText);
+      const coordinates = await geocodeAddress(
+        addressText,
+        cityText,
+        locationState,
+      );
       if (!coordinates) {
         showFormError(
-          "Não foi possível localizar este endereço. Informe um endereço mais completo ou uma rua/cidade válida.",
+          "Não foi possível localizar esse endereço na cidade e UF informadas. Confira rua, número, cidade e UF.",
         );
         return;
       }
 
-      const response = await apiFetch("/api/operations/locations", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
-        },
-        body: JSON.stringify({
+      const editingLocation = clients.find(
+        (client) => client.id === editingContactId,
+      );
+      const isPersistedLocation = Boolean(
+        editingLocation?.kind &&
+        !editingLocation.id.startsWith("client-demo-") &&
+        !editingLocation.id.startsWith("collection-demo-"),
+      );
+      const duplicateCoordinates = clients.find(
+        (client) =>
+          client.id !== editingContactId &&
+          client.kind !== locationKind &&
+          client.latitude === coordinates.latitude &&
+          client.longitude === coordinates.longitude,
+      );
+      if (duplicateCoordinates) {
+        showFormError(
+          "Este endereço foi localizado no mesmo ponto de outro local. Confira o número, a cidade e a UF antes de salvar.",
+        );
+        return;
+      }
+
+      const locationPayload = {
+        kind: locationKind,
+        name: name.trim(),
+        email: email.trim(),
+        phone: locationPhone.trim(),
+        address: addressText,
+        city: cityText,
+        state: stateText,
+        latitude: coordinates.latitude,
+        longitude: coordinates.longitude,
+        companyIds: locationCompanyIds,
+      };
+      const token = localStorage.getItem("acneto-access-token");
+      if (token && (!editingContactId || isPersistedLocation)) {
+        const response = await apiFetch(
+          isPersistedLocation
+            ? `/api/operations/locations/${editingLocation!.id}`
+            : "/api/operations/locations",
+          {
+            method: isPersistedLocation ? "PATCH" : "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(locationPayload),
+          },
+        );
+        const result = (await response.json()) as {
+          location?: DemoContact;
+          error?: string;
+        };
+        if (!response.ok || !result.location) {
+          showFormError(result.error ?? "Não foi possível salvar o local.");
+          return;
+        }
+        setClients((items) =>
+          isPersistedLocation
+            ? items.map((item) =>
+                item.id === result.location!.id ? result.location! : item,
+              )
+            : [result.location!, ...items],
+        );
+      } else {
+        const localLocation: DemoContact = {
+          id: editingContactId ?? `${Date.now()}`,
           kind: locationKind,
           name: name.trim(),
           email: email.trim(),
           phone: locationPhone.trim(),
-          address: addressText,
+          region: cityText,
           city: cityText,
+          state: stateText,
+          address: addressText,
+          company_ids: locationCompanyIds,
+          accessLevel: "cliente",
+          status: "ativo",
           latitude: coordinates.latitude,
           longitude: coordinates.longitude,
-          companyIds: locationCompanyIds,
-        }),
-      });
-      if (!response.ok) {
-        const body = (await response.json()) as { error?: string };
-        showFormError(body.error ?? "Não foi possível salvar o cliente.");
-        return;
+        };
+        setClients((items) =>
+          editingContactId
+            ? items.map((item) =>
+                item.id === editingContactId ? localLocation : item,
+              )
+            : [localLocation, ...items],
+        );
       }
-      const body = (await response.json()) as { location: DemoContact };
-      setClients((items) => [body.location, ...items]);
       setName("");
       setEmail("");
       setLocationPhone("");
       setRegion("");
+      setLocationState("");
       setLocationAddress("");
       setLocationCompanyIds([]);
-      setFormSuccess("Cadastro criado com sucesso.");
+      setLocationKind("final_customer");
+      setEditingContactId(null);
+      setFormSuccess(
+        coordinates.approximate
+          ? `GPS aproximado ao trecho da via (${coordinates.matchedAddress}); o número exato não foi localizado.`
+          : isPersistedLocation
+            ? "Endereço atualizado com GPS confirmado."
+            : "Cadastro criado com GPS confirmado.",
+      );
       return;
     }
 
@@ -2019,8 +2114,6 @@ function RoleDashboard({
         ),
       );
       setEditingContactId(null);
-    } else if (requestedAccessLevel === "cliente") {
-      setClients((prev) => [newEntry, ...prev]);
     } else {
       setOperators((prev) => [newEntry, ...prev]);
     }
@@ -2037,8 +2130,17 @@ function RoleDashboard({
     setName(contact.name);
     setEmail(contact.email);
     setLocationPhone(contact.phone ?? "");
-    setRegion(contact.region);
-    setAccessLevel(contact.accessLevel);
+    setRegion(contact.city ?? contact.region);
+    setLocationState(contact.state ?? "");
+    setLocationAddress(contact.address ?? "");
+    setLocationCompanyIds(contact.company_ids ?? []);
+    if (contact.kind) {
+      setLocationKind(contact.kind);
+      setAccessLevel("cliente");
+      setRegistrationTab("clients");
+    } else {
+      setAccessLevel(contact.accessLevel);
+    }
     setTab("cadastros");
   };
 
@@ -2307,9 +2409,7 @@ function RoleDashboard({
             <SettingsMenu onSignOut={onSignOut} />
           </div>
         </header>
-        <section
-          className={`mb-6 grid gap-4 ${role === "admin" ? "md:grid-cols-4" : "md:grid-cols-3"}`}
-        >
+        <section className="mb-6 grid gap-4 md:grid-cols-3">
           <MetricCard
             icon={Users}
             label="Clientes"
@@ -2333,19 +2433,8 @@ function RoleDashboard({
             active={directory === "drivers"}
             onClick={() => setDirectory("drivers")}
           />
-          {(isSuperAdmin || negotiationsEnabled) && (
-            <MetricCard
-              icon={MessageCircle}
-              label="Negociações ativas"
-              value={String(activeNegotiations)}
-              active={tab === "negociacoes"}
-              onClick={() => setTab("negociacoes")}
-            />
-          )}
         </section>
-        <div
-          className={`mb-6 grid gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 ${role === "admin" || role === "operator" ? (isSuperAdmin ? "grid-cols-2 sm:grid-cols-4 lg:grid-cols-9" : "grid-cols-2 sm:grid-cols-4 lg:grid-cols-8") : "grid-cols-2 sm:grid-cols-4"}`}
-        >
+        <div className="mb-6 grid gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
           <button
             onClick={() => setTab("resumo")}
             className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
@@ -2356,22 +2445,6 @@ function RoleDashboard({
           >
             Resumo
           </button>
-          {(isSuperAdmin || financeEnabled) && (
-            <button
-              onClick={() => setTab("financeiro")}
-              className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${tab === "financeiro" ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
-            >
-              Financeiro
-            </button>
-          )}
-          {isSuperAdmin && (
-            <button
-              onClick={() => setTab("modulos")}
-              className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${tab === "modulos" ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
-            >
-              Módulos
-            </button>
-          )}
           {(role === "admin" || role === "operator") && (
             <button
               onClick={() => {
@@ -2412,18 +2485,6 @@ function RoleDashboard({
           >
             Meus dados
           </button>
-          {(isSuperAdmin || negotiationsEnabled) && (
-            <button
-              onClick={() => setTab("negociacoes")}
-              className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
-                tab === "negociacoes"
-                  ? "bg-white text-[#0b1d3a] shadow-sm"
-                  : "text-slate-500"
-              }`}
-            >
-              Negociações
-            </button>
-          )}
           {(role === "admin" || role === "operator") && (
             <button
               onClick={() => setTab("rotas")}
@@ -2451,6 +2512,18 @@ function RoleDashboard({
                   {pendingUsers.length}
                 </span>
               )}
+            </button>
+          )}
+          {isSuperAdmin && (
+            <button
+              onClick={() => setTab("dados")}
+              className={`flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold transition ${
+                tab === "dados"
+                  ? "bg-white text-[#0b1d3a] shadow-sm"
+                  : "text-slate-500"
+              }`}
+            >
+              <Database size={15} /> Dados
             </button>
           )}
         </div>{" "}
@@ -2989,7 +3062,9 @@ function RoleDashboard({
                       <input
                         value={region}
                         onChange={(e) => setRegion(e.target.value)}
-                        placeholder="Região"
+                        placeholder={
+                          accessLevel === "cliente" ? "Cidade" : "Região"
+                        }
                         className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                       />
                       {accessLevel === "cliente" && (
@@ -3017,6 +3092,20 @@ function RoleDashboard({
                             <option value="final_customer">
                               Cliente final
                             </option>
+                          </select>
+                          <select
+                            value={locationState}
+                            onChange={(event) =>
+                              setLocationState(event.target.value)
+                            }
+                            className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                          >
+                            <option value="">UF do endereço</option>
+                            {brazilianStates.map(([uf, stateName]) => (
+                              <option key={uf} value={uf}>
+                                {uf} · {stateName}
+                              </option>
+                            ))}
                           </select>
                           <input
                             value={locationAddress}
@@ -3087,34 +3176,6 @@ function RoleDashboard({
                           className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
                         />
                       )}
-                      {role === "admin" && accessLevel === "operador" && (
-                        <label className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm text-blue-900 sm:col-span-2">
-                          <input
-                            type="checkbox"
-                            checked={financeEnabledForNewOperator}
-                            onChange={(event) =>
-                              setFinanceEnabledForNewOperator(
-                                event.target.checked,
-                              )
-                            }
-                          />
-                          Permitir que este operador gerencie o financeiro
-                        </label>
-                      )}
-                      {role === "admin" && accessLevel === "operador" && (
-                        <label className="flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-sm text-indigo-900 sm:col-span-2">
-                          <input
-                            type="checkbox"
-                            checked={negotiationsEnabledForNewOperator}
-                            onChange={(event) =>
-                              setNegotiationsEnabledForNewOperator(
-                                event.target.checked,
-                              )
-                            }
-                          />
-                          Permitir que este operador gerencie negociações
-                        </label>
-                      )}
                     </div>
 
                     <button
@@ -3145,35 +3206,36 @@ function RoleDashboard({
                         <div key={operator.id} className="space-y-2">
                           <RegistryRow
                             title={operator.name}
-                            detail={`${operator.email} · ${operator.financeEnabled ? "Financeiro autorizado" : "Financeiro não autorizado"}`}
+                            detail={operator.email}
                             status={operator.status}
                           />
                           {role === "admin" && (
-                            <div className="grid gap-2 sm:grid-cols-2">
+                            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                              <input
+                                type="password"
+                                value={passwordResetValues[operator.id] ?? ""}
+                                onChange={(event) =>
+                                  setPasswordResetValues((current) => ({
+                                    ...current,
+                                    [operator.id]: event.target.value,
+                                  }))
+                                }
+                                placeholder="Nova senha (mínimo 8 caracteres)"
+                                className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-slate-700 outline-none focus:border-blue-500"
+                              />
                               <button
                                 type="button"
                                 onClick={() =>
-                                  void toggleOperatorModule(operator, "finance")
+                                  void resetUserPassword(operator.id)
                                 }
-                                className="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50"
-                              >
-                                {operator.financeEnabled
-                                  ? "Remover Financeiro"
-                                  : "Autorizar Financeiro"}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void toggleOperatorModule(
-                                    operator,
-                                    "negotiations",
-                                  )
+                                disabled={
+                                  passwordResettingUserId === operator.id
                                 }
-                                className="rounded-lg border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                                className="rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
                               >
-                                {operator.negotiationsEnabled
-                                  ? "Remover Negociações"
-                                  : "Autorizar Negociações"}
+                                {passwordResettingUserId === operator.id
+                                  ? "Alterando..."
+                                  : "Alterar senha"}
                               </button>
                             </div>
                           )}
@@ -3204,130 +3266,16 @@ function RoleDashboard({
             statusFilter={statusFilter}
             setStatusFilter={setStatusFilter}
             onSelectDriver={setSelectedDriverId}
-            onOpenNegotiation={() => void openNegotiation()}
-            canOpenNegotiation={isSuperAdmin || negotiationsEnabled}
-          />
-        ) : tab === "negociacoes" && (isSuperAdmin || negotiationsEnabled) ? (
-          <NegotiationsPanel
-            drivers={directoryDrivers.length ? directoryDrivers : drivers}
-            clients={clients}
-            selectedDriverId={selectedDriverId}
-            selectedClientIds={selectedClientIds}
-            routeDistanceKm={routeSummary ? routeSummary.distance / 1000 : null}
+            canOpenChat
+            isSuperAdmin={isSuperAdmin}
           />
         ) : tab === "rotas" ? (
           <RoutesPanel
             drivers={directoryDrivers.length ? directoryDrivers : drivers}
             clients={clients}
           />
-        ) : tab === "modulos" && isSuperAdmin ? (
-          <section className="space-y-5">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-600">
-                Superadmin
-              </p>
-              <h2 className="mt-1 text-2xl font-bold text-[#0b1d3a]">
-                Gestão de módulos
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Libere somente os módulos em desenvolvimento para cada
-                administrador ou operador.
-              </p>
-            </div>
-            <div className="space-y-3">
-              {moduleUsers.map((user) => (
-                <div
-                  key={user.id}
-                  className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
-                >
-                  <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-                    <div>
-                      <p className="font-bold text-[#0b1d3a]">{user.name}</p>
-                      <p className="text-sm text-slate-500">
-                        {user.email} ·{" "}
-                        {user.is_super_admin
-                          ? "Superadministrador"
-                          : user.role === "admin"
-                            ? "Administrador"
-                            : user.role === "operator"
-                              ? "Operador"
-                              : user.role === "driver"
-                                ? "Motorista"
-                                : user.role === "carrier"
-                                  ? "Transportadora"
-                                  : user.role}
-                      </p>
-                    </div>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {(user.role === "operator" || user.role === "admin") && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void toggleModuleUser(
-                                user.id,
-                                "finance",
-                                user.finance_enabled,
-                              )
-                            }
-                            className={`rounded-xl px-3 py-2 text-xs font-bold ${user.finance_enabled ? "bg-emerald-600 text-white" : "border border-slate-200 text-slate-600"}`}
-                          >
-                            {user.finance_enabled
-                              ? "Financeiro liberado"
-                              : "Liberar Financeiro"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void toggleModuleUser(
-                                user.id,
-                                "negotiations",
-                                user.negotiations_enabled,
-                              )
-                            }
-                            className={`rounded-xl px-3 py-2 text-xs font-bold ${user.negotiations_enabled ? "bg-indigo-600 text-white" : "border border-slate-200 text-slate-600"}`}
-                          >
-                            {user.negotiations_enabled
-                              ? "Negociações liberadas"
-                              : "Liberar Negociações"}
-                          </button>
-                        </>
-                      )}
-                      <input
-                        type="password"
-                        value={passwordResetValues[user.id] ?? ""}
-                        onChange={(event) =>
-                          setPasswordResetValues((current) => ({
-                            ...current,
-                            [user.id]: event.target.value,
-                          }))
-                        }
-                        placeholder="Nova senha (mínimo 8)"
-                        className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void resetUserPassword(user.id)}
-                        disabled={passwordResettingUserId === user.id}
-                        className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-bold text-white hover:bg-amber-600 disabled:cursor-wait disabled:opacity-60"
-                      >
-                        {passwordResettingUserId === user.id
-                          ? "Alterando..."
-                          : "Alterar senha"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {!moduleUsers.length && (
-                <p className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-500">
-                  Nenhum administrador ou operador gerenciável encontrado.
-                </p>
-              )}
-            </div>
-          </section>
-        ) : tab === "financeiro" && (isSuperAdmin || financeEnabled) ? (
-          <FinancePanel />
+        ) : tab === "dados" && isSuperAdmin ? (
+          <SuperAdminDataManager />
         ) : tab === "solicitacoes" ? (
           <div className="space-y-5">
             <PendingVehiclesPanel
@@ -3864,8 +3812,8 @@ function LocationMapView({
   statusFilter,
   setStatusFilter,
   onSelectDriver,
-  onOpenNegotiation,
-  canOpenNegotiation,
+  canOpenChat = false,
+  isSuperAdmin = false,
   showRoutePanel = true,
 }: {
   drivers: DemoDriver[];
@@ -3886,8 +3834,8 @@ function LocationMapView({
   statusFilter: string;
   setStatusFilter: (value: string) => void;
   onSelectDriver: (value: string | null) => void;
-  onOpenNegotiation: () => void;
-  canOpenNegotiation: boolean;
+  canOpenChat?: boolean;
+  isSuperAdmin?: boolean;
   showRoutePanel?: boolean;
 }) {
   const [detailsExpanded, setDetailsExpanded] = useState(false);
@@ -3916,6 +3864,32 @@ function LocationMapView({
     drivers.find((driver) => driver.id === selectedDriverId) ??
     drivers[0] ??
     null;
+  const chatCollectionPoint = clients.find(
+    (client) =>
+      selectedClientIds.includes(client.id) &&
+      client.kind === "collection_point",
+  );
+  const chatFinalCustomer = clients.find(
+    (client) =>
+      selectedClientIds.includes(client.id) && client.kind === "final_customer",
+  );
+  const openingFreightContext =
+    selectedDriver && routeSummary && chatCollectionPoint && chatFinalCustomer
+      ? {
+          key: `${selectedDriver.id}:${chatCollectionPoint.id}:${chatFinalCustomer.id}:${routeSummary.distance}`,
+          collectionPointId: chatCollectionPoint.id,
+          collectionPointName: chatCollectionPoint.name,
+          finalCustomerId: chatFinalCustomer.id,
+          finalCustomerName: chatFinalCustomer.name,
+        }
+      : undefined;
+  const openingChatProposal =
+    selectedDriver && routeSummary && openingFreightContext
+      ? {
+          key: openingFreightContext.key,
+          message: `Olá ${selectedDriver.full_name}, tenho uma proposta de frete para a rota ${openingFreightContext.collectionPointName} → ${openingFreightContext.finalCustomerName}. A distância estimada é ${formatRouteDistance(routeSummary.distance)}. Podemos conversar sobre o valor e as condições?`,
+        }
+      : undefined;
   const locatedDrivers = drivers.filter(
     (driver) =>
       Number.isFinite(driver.latitude) && Number.isFinite(driver.longitude),
@@ -4317,14 +4291,25 @@ function LocationMapView({
                   Telefone do motorista não informado para negociar o frete.
                 </p>
               )}
-              {canOpenNegotiation && (
-                <button
-                  type="button"
-                  onClick={onOpenNegotiation}
-                  className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-100"
-                >
-                  Abrir negociação no sistema
-                </button>
+              {canOpenChat && (
+                <div className="mt-2">
+                  <DriverChat
+                    key={selectedDriver.id}
+                    driverId={selectedDriver.id}
+                    participantName={selectedDriver.full_name}
+                    openingProposal={openingChatProposal}
+                    freightContext={openingFreightContext}
+                  />
+                </div>
+              )}
+              {isSuperAdmin && (
+                <div className="mt-3">
+                  <DriverChatArchive
+                    headers={{
+                      Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
+                    }}
+                  />
+                </div>
               )}
             </div>
           ) : (

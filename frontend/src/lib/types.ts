@@ -7,8 +7,6 @@ export type Profile = {
   full_name: string | null;
   created_at: string;
   must_change_password?: boolean;
-  finance_enabled?: boolean;
-  negotiations_enabled?: boolean;
   is_super_admin?: boolean;
 };
 

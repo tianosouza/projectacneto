@@ -63,8 +63,6 @@ const apiProfile = (profile: {
   fullName: string | null;
   createdAt: string;
   mustChangePassword?: boolean;
-  financeEnabled?: boolean;
-  negotiationsEnabled?: boolean;
   isSuperAdmin?: boolean;
 }): Profile => ({
   id: profile.id,
@@ -73,8 +71,6 @@ const apiProfile = (profile: {
   full_name: profile.fullName,
   created_at: profile.createdAt,
   must_change_password: profile.mustChangePassword,
-  finance_enabled: profile.financeEnabled,
-  negotiations_enabled: profile.negotiationsEnabled,
   is_super_admin: profile.isSuperAdmin,
 });
 

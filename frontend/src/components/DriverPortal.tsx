@@ -11,6 +11,7 @@ import {
   Phone,
   Mail,
   Calendar,
+  ArrowLeft,
   Settings,
   ChevronRight,
   Power,
@@ -19,24 +20,21 @@ import {
   Save,
   X,
   LogOut,
-  Bell,
+  MessageCircle,
+  DollarSign,
   Route as RouteIcon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import type { Driver } from "@/lib/types";
-import type { FreightRoute } from "@/lib/dashboardTypes";
+import type { FreightRoute, FreightSettlement } from "@/lib/dashboardTypes";
 import { AccountCenter } from "@/components/AccountCenter";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SettingsMenu } from "@/components/SettingsMenu";
+import { DriverChat } from "@/components/DriverChat";
+import { FreightChatHistory } from "@/components/FreightChatHistory";
 import { apiEventSource, apiFetch } from "@/lib/api";
 
-type Tab =
-  | "home"
-  | "profile"
-  | "history"
-  | "negotiations"
-  | "routes"
-  | "settings";
+type Tab = "home" | "profile" | "chat" | "routes" | "recebimentos" | "settings";
 const accessToken = () => localStorage.getItem("acneto-access-token");
 const apiHeaders = () => ({
   "Content-Type": "application/json",
@@ -88,6 +86,7 @@ export function DriverPortal() {
   const { user, profile, signOut } = useAuth();
   const [tab, setTab] = useState<Tab>("home");
   const [driver, setDriver] = useState<Driver | null>(null);
+  const [freightOfferNotice, setFreightOfferNotice] = useState(false);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [locationStatus, setLocationStatus] = useState<
@@ -99,36 +98,11 @@ export function DriverPortal() {
   const [availabilityDate, setAvailabilityDate] = useState("");
   const [availabilityTime, setAvailabilityTime] = useState("");
   const [availabilityError, setAvailabilityError] = useState("");
-  const [pendingNegotiations, setPendingNegotiations] = useState(0);
-  const [walletPreview, setWalletPreview] = useState<{
-    total: number;
-    pending: number;
-    completed_freights: number;
-  } | null>(null);
   const lastReverseGeocode = useRef({ key: "", timestamp: 0 });
   const driverId = driver?.id;
   const locationPermissionKey = driverId
     ? `acneto-location-permission:${driverId}`
     : null;
-
-  useEffect(() => {
-    if (!driverId || !accessToken()) return;
-    let active = true;
-    const loadOffers = async () => {
-      const response = await apiFetch("/api/negotiations?status=pending", {
-        headers: apiHeaders(),
-      });
-      if (!response.ok || !active) return;
-      const body = (await response.json()) as { negotiations: unknown[] };
-      setPendingNegotiations(body.negotiations.length);
-    };
-    void loadOffers();
-    const timer = window.setInterval(() => void loadOffers(), 5000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [driverId]);
 
   useEffect(() => {
     const goHome = () => setTab("home");
@@ -137,23 +111,24 @@ export function DriverPortal() {
   }, []);
 
   useEffect(() => {
-    if (!driverId || !accessToken()) return;
-    let active = true;
-    const loadWalletPreview = async () => {
-      const response = await apiFetch("/api/drivers/me/wallet", {
-        headers: apiHeaders(),
-      });
-      if (!response.ok || !active) return;
-      const body = (await response.json()) as {
-        summary: { total: number; pending: number; completed_freights: number };
-      };
-      setWalletPreview(body.summary);
+    const token = accessToken();
+    if (!driverId || !token) return;
+    const events = apiEventSource(
+      `/api/events?token=${encodeURIComponent(token)}`,
+    );
+    const handleEvent = (event: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(event.data) as { type?: string };
+        if (payload.type === "nearest-driver-freight-offer")
+          setFreightOfferNotice(true);
+      } catch {
+        // Ignore malformed SSE payloads.
+      }
     };
-    void loadWalletPreview();
-    const timer = window.setInterval(() => void loadWalletPreview(), 10000);
+    events.addEventListener("message", handleEvent);
     return () => {
-      active = false;
-      window.clearInterval(timer);
+      events.removeEventListener("message", handleEvent);
+      events.close();
     };
   }, [driverId]);
 
@@ -486,6 +461,37 @@ export function DriverPortal() {
   return (
     <div className="flex min-h-screen flex-col bg-[#f5f7fa]">
       <TopBar driver={driver} onSignOut={signOut} />
+      {freightOfferNotice && (
+        <div className="fixed inset-x-4 top-20 z-40 mx-auto flex max-w-lg items-center gap-3 rounded-xl border border-blue-200 bg-white p-4 shadow-lg">
+          <MessageCircle className="shrink-0 text-blue-700" size={22} />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-[#0b1d3a]">
+              Nova oferta de frete
+            </p>
+            <p className="text-xs text-slate-500">
+              A operação enviou uma oferta para você.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setFreightOfferNotice(false);
+              setTab("chat");
+            }}
+            className="shrink-0 rounded-lg bg-[#1052c7] px-3 py-2 text-xs font-semibold text-white"
+          >
+            Ver oferta
+          </button>
+          <button
+            type="button"
+            onClick={() => setFreightOfferNotice(false)}
+            aria-label="Fechar aviso de nova oferta"
+            className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {locationPromptOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-4 sm:items-center">
@@ -602,7 +608,7 @@ export function DriverPortal() {
       )}
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 pb-28 sm:px-6 lg:pb-10">
-        {tab === "home" && (
+        {(tab === "home" || tab === "chat") && (
           <HomeView
             driver={driver}
             locationStatus={locationStatus}
@@ -629,10 +635,8 @@ export function DriverPortal() {
               setDriver(updated);
             }}
             toggling={toggling}
-            pendingNegotiations={pendingNegotiations}
-            onOpenNegotiations={() => setTab("negotiations")}
-            walletPreview={walletPreview}
-            onOpenWallet={() => setTab("history")}
+            onOpenChat={() => setTab("chat")}
+            onOpenFreights={() => setTab("recebimentos")}
           />
         )}
         {tab === "profile" && (
@@ -646,9 +650,17 @@ export function DriverPortal() {
             driver={driver}
           />
         )}
-        {tab === "history" && <WalletView />}
-        {tab === "negotiations" && <DriverNegotiationsView />}
+        {tab === "chat" && driver && (
+          <DriverChat
+            driverId={driver.id}
+            participantName="Operação"
+            initiallyOpen
+          />
+        )}
         {tab === "routes" && <DriverRoutesView />}
+        {tab === "recebimentos" && (
+          <DriverFreightSettlementsView onBack={() => setTab("home")} />
+        )}
         {tab === "settings" && <SettingsView onSignOut={signOut} />}
       </main>
 
@@ -742,24 +754,16 @@ function HomeView({
   onToggle,
   onUpdate,
   toggling,
-  pendingNegotiations,
-  onOpenNegotiations,
-  walletPreview,
-  onOpenWallet,
+  onOpenChat,
+  onOpenFreights,
 }: {
   driver: Driver;
   locationStatus: "idle" | "tracking" | "denied" | "unavailable";
   onToggle: () => void;
   onUpdate: (updates: Partial<Driver>) => void;
   toggling: boolean;
-  pendingNegotiations: number;
-  onOpenNegotiations: () => void;
-  walletPreview: {
-    total: number;
-    pending: number;
-    completed_freights: number;
-  } | null;
-  onOpenWallet: () => void;
+  onOpenChat: () => void;
+  onOpenFreights: () => void;
 }) {
   const operationalStatuses: { value: Driver["status"]; label: string }[] = [
     { value: "available", label: "Estou disponível" },
@@ -810,46 +814,36 @@ function HomeView({
         </button>
       </div>
 
-      <button
-        type="button"
-        onClick={onOpenNegotiations}
-        className="flex w-full items-center justify-between rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4 text-left transition hover:bg-blue-100"
-      >
-        <div>
-          <p className="text-sm font-bold text-blue-900">Ofertas de frete</p>
-          <p className="mt-1 text-xs text-blue-700">
-            {pendingNegotiations > 0
-              ? "Você tem proposta aguardando resposta."
-              : "Consulte suas negociações e mensagens."}
-          </p>
-        </div>
-        <span className="rounded-full bg-blue-600 px-3 py-1 text-xs font-bold text-white">
-          {pendingNegotiations}
-        </span>
-      </button>
-
-      <button
-        type="button"
-        onClick={onOpenWallet}
-        className="flex w-full items-center justify-between rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-left transition hover:bg-emerald-100"
-      >
-        <div>
-          <p className="text-sm font-bold text-emerald-900">Minha carteira</p>
-          <p className="mt-1 text-xs text-emerald-700">
-            {walletPreview?.completed_freights ?? 0} fretes concluídos · A
-            receber: R${" "}
-            {(walletPreview?.pending ?? 0).toLocaleString("pt-BR", {
-              minimumFractionDigits: 2,
-            })}
-          </p>
-        </div>
-        <strong className="text-emerald-800">
-          R${" "}
-          {(walletPreview?.total ?? 0).toLocaleString("pt-BR", {
-            minimumFractionDigits: 2,
-          })}
-        </strong>
-      </button>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={onOpenChat}
+          className="flex w-full items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-5 py-4 text-left transition hover:bg-blue-100"
+        >
+          <div>
+            <p className="text-sm font-bold text-blue-900">Chat com operação</p>
+            <p className="mt-1 text-xs text-blue-700">
+              Converse diretamente com a equipe.
+            </p>
+          </div>
+          <MessageCircle className="text-blue-700" size={20} />
+        </button>
+        <button
+          type="button"
+          onClick={onOpenFreights}
+          className="flex w-full items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-left transition hover:bg-emerald-100"
+        >
+          <div>
+            <p className="text-sm font-bold text-emerald-900">
+              Fretes e recebimentos
+            </p>
+            <p className="mt-1 text-xs text-emerald-700">
+              Confira valores pendentes e pagamentos.
+            </p>
+          </div>
+          <DollarSign className="text-emerald-700" size={20} />
+        </button>
+      </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-start justify-between gap-4">
@@ -1280,494 +1274,6 @@ export function ProfileField({
   );
 }
 
-function WalletView() {
-  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
-  const [wallet, setWallet] = useState<{
-    summary: {
-      total: number;
-      pending: number;
-      paid: number;
-      completed_freights: number;
-    };
-    entries: Array<{
-      id: string;
-      amount: number;
-      status: string;
-      payment_note?: string | null;
-      payment_proof_name?: string | null;
-      payment_proof_data?: string | null;
-      company?: { name?: string; legal_name?: string } | null;
-      created_at: string;
-      negotiation?: {
-        collection_point?: { name?: string } | null;
-        final_customer?: { name?: string } | null;
-      } | null;
-    }>;
-  } | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    const loadWallet = async () => {
-      const response = await apiFetch("/api/drivers/me/wallet", {
-        headers: apiHeaders(),
-      });
-      if (!response.ok || !active) return;
-      setWallet((await response.json()) as typeof wallet);
-    };
-    void loadWallet();
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const money = (value: number) =>
-    `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
-  return (
-    <div className="space-y-6">
-      <div>
-        <button
-          type="button"
-          onClick={() =>
-            window.dispatchEvent(new CustomEvent("acneto-driver-go-home"))
-          }
-          className="mb-3 text-sm font-semibold text-blue-700 hover:underline"
-        >
-          ← Voltar para início
-        </button>
-        <h1 className="text-xl font-bold text-[#0b1d3a]">Minha carteira</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Acompanhe seus fretes concluídos e valores a receber.
-        </p>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <WalletMetric
-          label="Total concluído"
-          value={money(wallet?.summary.total ?? 0)}
-        />
-        <WalletMetric
-          label="A receber"
-          value={money(wallet?.summary.pending ?? 0)}
-        />
-        <WalletMetric
-          label="Fretes concluídos"
-          value={String(wallet?.summary.completed_freights ?? 0)}
-        />
-      </div>
-      <div className="space-y-3">
-        {wallet?.entries.map((entry) => (
-          <button
-            type="button"
-            onClick={() =>
-              setSelectedEntryId((current) =>
-                current === entry.id ? null : entry.id,
-              )
-            }
-            key={entry.id}
-            className="w-full rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-                  <Truck size={18} />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-slate-800">
-                    {entry.negotiation?.collection_point?.name ?? "Origem"} →{" "}
-                    {entry.negotiation?.final_customer?.name ?? "Destino"}
-                  </p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    {new Date(entry.created_at).toLocaleDateString("pt-BR")}
-                  </p>
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="text-sm font-bold text-[#0b1d3a]">
-                  {money(entry.amount)}
-                </p>
-                <span className="text-[10px] font-semibold text-amber-600">
-                  {entry.status === "paid"
-                    ? "Pago"
-                    : entry.status === "approved"
-                      ? "Pagamento aprovado"
-                      : entry.status === "rejected"
-                        ? "Devolvido para conferência"
-                        : "Aguardando conferência"}
-                </span>
-                {entry.company && (
-                  <p className="mt-1 text-[10px] text-slate-400">
-                    Pagador: {entry.company.name ?? entry.company.legal_name}
-                  </p>
-                )}
-              </div>
-            </div>
-            {selectedEntryId === entry.id && (
-              <div className="mt-4 grid gap-2 border-t border-slate-100 pt-4 text-xs text-slate-600 sm:grid-cols-2">
-                <p>
-                  <strong>Valor:</strong> {money(entry.amount)}
-                </p>
-                <p>
-                  <strong>Status:</strong>{" "}
-                  {entry.status === "paid"
-                    ? "Pagamento realizado"
-                    : "Aguardando pagamento"}
-                </p>
-                <p>
-                  <strong>Empresa:</strong>{" "}
-                  {entry.company?.name ??
-                    entry.company?.legal_name ??
-                    "Autônomo"}
-                </p>
-                <p>
-                  <strong>Data:</strong>{" "}
-                  {new Date(entry.created_at).toLocaleString("pt-BR")}
-                </p>
-                {entry.status === "paid" &&
-                  entry.payment_proof_name &&
-                  entry.payment_proof_data && (
-                    <a
-                      href={entry.payment_proof_data}
-                      download={entry.payment_proof_name}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-semibold text-blue-700 sm:col-span-2"
-                    >
-                      Ver comprovante de pagamento: {entry.payment_proof_name}
-                    </a>
-                  )}
-              </div>
-            )}
-          </button>
-        ))}
-        {wallet && wallet.entries.length === 0 && (
-          <p className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-500">
-            Nenhum frete concluído na carteira.
-          </p>
-        )}
-        {!wallet && (
-          <p className="text-sm text-slate-500">Carregando carteira...</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function WalletMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-        {label}
-      </p>
-      <p className="mt-2 text-xl font-bold text-[#0b1d3a]">{value}</p>
-    </div>
-  );
-}
-
-function DriverNegotiationsView() {
-  const goHome = () =>
-    window.dispatchEvent(new CustomEvent("acneto-driver-go-home"));
-  const [items, setItems] = useState<
-    Array<{
-      id: string;
-      collection_point?: { name?: string } | null;
-      final_customer?: { name?: string } | null;
-      product?: string | null;
-      distance_km: number | null;
-      price_per_km: number | null;
-      current_value: number;
-      status: string;
-      messages: Array<{ id: string; body: string }>;
-    }>
-  >([]);
-  const [offerValues, setOfferValues] = useState<Record<string, string>>({});
-  const [messageValues, setMessageValues] = useState<Record<string, string>>(
-    {},
-  );
-  const [error, setError] = useState("");
-  const load = async () => {
-    const response = await apiFetch("/api/negotiations", {
-      headers: apiHeaders(),
-    });
-    if (response.ok)
-      setItems(
-        ((await response.json()) as { negotiations: typeof items })
-          .negotiations,
-      );
-    else setError("Não foi possível carregar suas ofertas.");
-  };
-  useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => void load(), 5000);
-    const token = accessToken();
-    const events = token
-      ? apiEventSource(`/api/events?token=${encodeURIComponent(token)}`)
-      : null;
-    const refreshOnEvent = () => void load();
-    events?.addEventListener("message", refreshOnEvent);
-    return () => {
-      window.clearInterval(timer);
-      events?.removeEventListener("message", refreshOnEvent);
-      events?.close();
-    };
-  }, []);
-  const action = async (id: string, name: "accept" | "reject") => {
-    const response = await apiFetch(`/api/negotiations/${id}/${name}`, {
-      method: "POST",
-      headers: apiHeaders(),
-    });
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string };
-      setError(body.error ?? "Não foi possível atualizar a oferta.");
-      return;
-    }
-    await load();
-  };
-  const sendOffer = async (id: string) => {
-    const response = await apiFetch(`/api/negotiations/${id}/offer`, {
-      method: "POST",
-      headers: apiHeaders(),
-      body: JSON.stringify({ amount: Number(offerValues[id]) }),
-    });
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string };
-      setError(body.error ?? "Não foi possível enviar a contraproposta.");
-      return;
-    }
-    setOfferValues((current) => ({ ...current, [id]: "" }));
-    await load();
-  };
-  const sendMessage = async (id: string) => {
-    const body = messageValues[id]?.trim();
-    if (!body) return;
-    const response = await apiFetch(`/api/negotiations/${id}/messages`, {
-      method: "POST",
-      headers: apiHeaders(),
-      body: JSON.stringify({ body }),
-    });
-    if (!response.ok) {
-      const result = (await response.json()) as { error?: string };
-      setError(result.error ?? "Não foi possível enviar a mensagem.");
-      return;
-    }
-    setMessageValues((current) => ({ ...current, [id]: "" }));
-    await load();
-  };
-  const freightStep = async (
-    id: string,
-    step: "start" | "depart" | "arrive" | "finish",
-  ) => {
-    const response = await apiFetch(`/api/negotiations/${id}/freight/${step}`, {
-      method: "POST",
-      headers: apiHeaders(),
-    });
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string };
-      setError(body.error ?? "Não foi possível atualizar o frete.");
-      return;
-    }
-    await load();
-  };
-  return (
-    <div className="space-y-6">
-      <div>
-        <button
-          type="button"
-          onClick={goHome}
-          className="mb-3 text-sm font-semibold text-blue-700 hover:underline"
-        >
-          ← Voltar para início
-        </button>
-        <h1 className="text-xl font-bold text-[#0b1d3a]">Ofertas de frete</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Aceite propostas ou envie uma contraproposta para a operação.
-        </p>
-      </div>
-      {error && (
-        <p className="rounded-xl bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
-          {error}
-        </p>
-      )}
-      {items.map((item) => {
-        const open = item.status === "pending" || item.status === "countered";
-        const conversationOpen = [
-          "pending",
-          "countered",
-          "accepted",
-          "in_transit",
-          "at_collection",
-          "driver_completed",
-        ].includes(item.status);
-        return (
-          <div
-            key={item.id}
-            className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-semibold text-slate-800">
-                  {item.collection_point?.name ?? "Origem"} →{" "}
-                  {item.final_customer?.name ?? "Destino"}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {item.distance_km?.toFixed(2) ?? "--"} km · R${" "}
-                  {item.price_per_km?.toFixed(2) ?? "--"}/km
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Produto: {item.product ?? "Não informado"}
-                </p>
-              </div>
-              <strong className="text-[#0b1d3a]">
-                R$ {item.current_value.toFixed(2)}
-              </strong>
-            </div>
-            <p className="mt-2 text-xs font-semibold text-blue-700">
-              {item.status === "pending"
-                ? "Nova oferta"
-                : item.status === "countered"
-                  ? "Contraproposta enviada"
-                  : item.status === "awaiting_loading"
-                    ? "Aguardando carregamento"
-                    : item.status === "in_transit"
-                      ? "Frete iniciado"
-                      : item.status === "at_collection"
-                        ? "Chegou ao posto de coleta"
-                        : item.status === "completed"
-                          ? "Frete finalizado"
-                          : item.status === "driver_completed"
-                            ? "Aguardando conferência da operação"
-                            : item.status}
-            </p>
-            {item.messages.map((message) => (
-              <p
-                key={message.id}
-                className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700"
-              >
-                {message.body}
-              </p>
-            ))}
-            {open && (
-              <>
-                <div className="mt-4 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void action(item.id, "accept")}
-                    className="flex-1 rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white"
-                  >
-                    Aceitar oferta
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void action(item.id, "reject")}
-                    className="flex-1 rounded-xl border border-rose-200 px-3 py-2 text-sm font-bold text-rose-700"
-                  >
-                    Recusar
-                  </button>
-                </div>
-                <div className="mt-2 flex gap-2">
-                  <input
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    placeholder="Valor da contraproposta"
-                    value={offerValues[item.id] ?? ""}
-                    onChange={(event) =>
-                      setOfferValues((current) => ({
-                        ...current,
-                        [item.id]: event.target.value,
-                      }))
-                    }
-                    className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void sendOffer(item.id)}
-                    className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white"
-                  >
-                    Enviar
-                  </button>
-                </div>
-                <div className="mt-2 flex gap-2">
-                  <input
-                    placeholder="Mensagem para a operação"
-                    value={messageValues[item.id] ?? ""}
-                    onChange={(event) =>
-                      setMessageValues((current) => ({
-                        ...current,
-                        [item.id]: event.target.value,
-                      }))
-                    }
-                    className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void sendMessage(item.id)}
-                    className="rounded-xl bg-slate-800 px-3 py-2 text-sm font-bold text-white"
-                  >
-                    Enviar
-                  </button>
-                </div>
-              </>
-            )}
-            {conversationOpen && !open && (
-              <div className="mt-3 flex gap-2">
-                <input
-                  placeholder="Mensagem para a operação"
-                  value={messageValues[item.id] ?? ""}
-                  onChange={(event) =>
-                    setMessageValues((current) => ({
-                      ...current,
-                      [item.id]: event.target.value,
-                    }))
-                  }
-                  className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={() => void sendMessage(item.id)}
-                  className="rounded-xl bg-slate-800 px-3 py-2 text-sm font-bold text-white"
-                >
-                  Enviar
-                </button>
-              </div>
-            )}
-            {item.status === "accepted" && (
-              <button
-                type="button"
-                onClick={() => void freightStep(item.id, "start")}
-                className="mt-3 w-full rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white"
-              >
-                Preparar carregamento
-              </button>
-            )}
-            {item.status === "awaiting_loading" && (
-              <button
-                type="button"
-                onClick={() => void freightStep(item.id, "depart")}
-                className="mt-3 w-full rounded-xl bg-amber-600 px-3 py-2 text-sm font-bold text-white"
-              >
-                Carregamento realizado e iniciar viagem
-              </button>
-            )}
-            {item.status === "in_transit" && (
-              <button
-                type="button"
-                onClick={() => void freightStep(item.id, "finish")}
-                className="mt-3 w-full rounded-xl bg-emerald-600 px-3 py-2 text-sm font-bold text-white"
-              >
-                Finalizar viagem e enviar para conferência
-              </button>
-            )}
-          </div>
-        );
-      })}
-      {!items.length && (
-        <p className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-500">
-          Nenhuma oferta recebida.
-        </p>
-      )}
-    </div>
-  );
-}
-
 const driverRouteStatusLabels: Record<string, string> = {
   open: "Aberta",
   assigned: "Designada",
@@ -1776,7 +1282,6 @@ const driverRouteStatusLabels: Record<string, string> = {
   cancelled: "Cancelada",
 };
 
-// Dashboard somente leitura: o motorista vê apenas as rotas atribuídas a ele.
 function DriverRoutesView() {
   const [routes, setRoutes] = useState<
     Array<
@@ -1785,6 +1290,7 @@ function DriverRoutesView() {
           id: string;
           capacity: string | null;
           status: string;
+          progress_status: FreightRoute["assignments"][number]["progress_status"];
         } | null;
       }
     >
@@ -1822,7 +1328,7 @@ function DriverRoutesView() {
   const endAssignment = async (
     routeId: string,
     assignmentId: string,
-    status: "completed" | "cancelled",
+    status: "cancelled",
   ) => {
     const response = await apiFetch(
       `/api/freight-routes/${routeId}/assignments/${assignmentId}`,
@@ -1840,6 +1346,76 @@ function DriverRoutesView() {
     await load();
   };
 
+  const advanceFreight = async (
+    routeId: string,
+    assignmentId: string,
+    action:
+      | "start_collection"
+      | "arrive_collection"
+      | "start_customer"
+      | "arrive_customer",
+  ) => {
+    const response = await apiFetch(
+      `/api/freight-routes/${routeId}/assignments/${assignmentId}/progress`,
+      {
+        method: "PATCH",
+        headers: apiHeaders(),
+        body: JSON.stringify({ action }),
+      },
+    );
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string };
+      setError(body.error ?? "Não foi possível atualizar o status do frete.");
+      return;
+    }
+    await load();
+  };
+
+  const progressLabels: Record<
+    FreightRoute["assignments"][number]["progress_status"],
+    string
+  > = {
+    assigned: "Aguardando início da viagem",
+    en_route_collection: "A caminho do posto de coleta",
+    awaiting_collection_confirmation:
+      "Chegada ao posto aguardando confirmação da operação",
+    collection_confirmed: "Posto de coleta confirmado",
+    en_route_customer: "A caminho do cliente final",
+    awaiting_customer_confirmation:
+      "Chegada ao cliente aguardando confirmação da operação",
+    completed: "Frete concluído",
+  };
+  const nextProgressAction: Partial<
+    Record<
+      FreightRoute["assignments"][number]["progress_status"],
+      {
+        action:
+          | "start_collection"
+          | "arrive_collection"
+          | "start_customer"
+          | "arrive_customer";
+        label: string;
+      }
+    >
+  > = {
+    assigned: {
+      action: "start_collection",
+      label: "Iniciar frete · a caminho do posto",
+    },
+    en_route_collection: {
+      action: "arrive_collection",
+      label: "Cheguei ao posto de coleta",
+    },
+    collection_confirmed: {
+      action: "start_customer",
+      label: "A caminho do cliente final",
+    },
+    en_route_customer: {
+      action: "arrive_customer",
+      label: "Cheguei ao cliente final",
+    },
+  };
+
   return (
     <div className="space-y-4">
       <div>
@@ -1850,80 +1426,385 @@ function DriverRoutesView() {
           Rotas atribuídas a você
         </h2>
       </div>
-
       {error && <p className="text-sm text-rose-600">{error}</p>}
-
-      {routes.map((route) => (
-        <div
-          key={route.id}
-          className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="font-bold text-[#0b1d3a]">
-                {route.collection_point?.name ?? "?"} →{" "}
-                {route.final_customer?.name ?? "?"}
-              </p>
-              <p className="mt-1 text-sm text-slate-500">
-                Capacidade:{" "}
-                {route.my_assignment?.capacity ?? route.total_capacity}
-                {route.distance_km
-                  ? ` · ${route.distance_km.toFixed(1)} km`
-                  : ""}
-              </p>
+      {routes.map((route) => {
+        const progressStatus =
+          route.my_assignment?.progress_status ?? "assigned";
+        const nextAction = nextProgressAction[progressStatus];
+        return (
+          <article
+            key={route.id}
+            className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-bold text-[#0b1d3a]">
+                  {route.collection_point?.name ?? "?"} →{" "}
+                  {route.final_customer?.name ?? "?"}
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Distância: {route.distance_km?.toFixed(1) ?? "—"} km
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">
+                {driverRouteStatusLabels[route.status] ?? route.status}
+              </span>
             </div>
-            <span className="shrink-0 rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">
-              {driverRouteStatusLabels[route.status] ?? route.status}
-            </span>
-          </div>
-
-          {(route.cargo || route.product || route.notes) && (
-            <div className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
-              {route.cargo && <p>Carga: {route.cargo}</p>}
-              {route.product && <p>Produto: {route.product}</p>}
-              {route.notes && <p>Observações: {route.notes}</p>}
-            </div>
-          )}
-
-          {route.my_assignment?.status === "active" && (
-            <div className="mt-3 flex gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  void endAssignment(
-                    route.id,
-                    route.my_assignment!.id,
-                    "completed",
-                  )
-                }
-                className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700"
-              >
-                Concluir minha parte
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  void endAssignment(
-                    route.id,
-                    route.my_assignment!.id,
-                    "cancelled",
-                  )
-                }
-                className="rounded-lg bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700"
-              >
-                Cancelar minha parte
-              </button>
-            </div>
-          )}
-        </div>
-      ))}
-
+            {route.my_assignment?.status === "active" && (
+              <div className="mt-3 space-y-3">
+                <div className="rounded-lg bg-slate-50 px-3 py-2">
+                  <p className="text-xs font-semibold text-slate-700">
+                    {progressLabels[progressStatus]}
+                  </p>
+                </div>
+                {nextAction && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void advanceFreight(
+                        route.id,
+                        route.my_assignment!.id,
+                        nextAction.action,
+                      )
+                    }
+                    className="rounded-lg bg-[#1052c7] px-3 py-2 text-xs font-semibold text-white"
+                  >
+                    {nextAction.label}
+                  </button>
+                )}
+                {[
+                  "awaiting_collection_confirmation",
+                  "awaiting_customer_confirmation",
+                ].includes(progressStatus) && (
+                  <p className="text-xs text-amber-700">
+                    A operação precisa confirmar sua chegada para liberar a
+                    próxima etapa.
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    void endAssignment(
+                      route.id,
+                      route.my_assignment!.id,
+                      "cancelled",
+                    )
+                  }
+                  className="rounded-lg bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700"
+                >
+                  Cancelar minha parte
+                </button>
+              </div>
+            )}
+          </article>
+        );
+      })}
       {!routes.length && (
         <p className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-500">
           Nenhuma rota atribuída a você no momento.
         </p>
       )}
     </div>
+  );
+}
+
+const formatSettlementCents = (amount: number | null) =>
+  new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format((amount ?? 0) / 100);
+
+function DriverFreightSettlementsView({ onBack }: { onBack: () => void }) {
+  const [settlements, setSettlements] = useState<FreightSettlement[]>([]);
+  const [drafts, setDrafts] = useState<
+    Record<string, { amount: string; notes: string }>
+  >({});
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const response = await apiFetch("/api/driver/freight-settlements", {
+          headers: apiHeaders(),
+        });
+        if (!response.ok)
+          throw new Error("Não foi possível carregar seus fretes.");
+        const body = (await response.json()) as {
+          settlements: FreightSettlement[];
+        };
+        if (!active) return;
+        setSettlements(body.settlements);
+        setDrafts((current) => {
+          const next = { ...current };
+          for (const settlement of body.settlements) {
+            if (!next[settlement.id]) {
+              next[settlement.id] = {
+                amount: settlement.driver_claimed_amount_cents
+                  ? (settlement.driver_claimed_amount_cents / 100).toFixed(2)
+                  : "",
+                notes: settlement.driver_notes ?? "",
+              };
+            }
+          }
+          return next;
+        });
+        setError("");
+      } catch (cause) {
+        if (active) setError((cause as Error).message);
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 15000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const saveClaim = async (settlement: FreightSettlement) => {
+    const draft = drafts[settlement.id];
+    const amountCents = Math.round(
+      Number(draft?.amount.replace(",", ".")) * 100,
+    );
+    if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+      setError("Informe um valor válido maior que zero.");
+      return;
+    }
+    setSavingId(settlement.id);
+    setError("");
+    try {
+      const response = await apiFetch(
+        `/api/driver/freight-settlements/${settlement.id}`,
+        {
+          method: "PATCH",
+          headers: apiHeaders(),
+          body: JSON.stringify({
+            claimedAmountCents: amountCents,
+            driverNotes: draft.notes,
+          }),
+        },
+      );
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok)
+        throw new Error(body.error ?? "Não foi possível enviar o valor.");
+      setSettlements((current) =>
+        current.map((item) =>
+          item.id === settlement.id
+            ? {
+                ...item,
+                driver_claimed_amount_cents: amountCents,
+                driver_notes: draft.notes,
+              }
+            : item,
+        ),
+      );
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const downloadPaymentProof = async (settlement: FreightSettlement) => {
+    setError("");
+    try {
+      const response = await apiFetch(
+        `/api/freight-settlements/${settlement.id}/proof`,
+        { headers: apiHeaders() },
+      );
+      if (!response.ok) {
+        const body = (await response.json()) as { error?: string };
+        throw new Error(body.error ?? "Não foi possível baixar o comprovante.");
+      }
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download =
+        settlement.payment_proof_file_name ?? "comprovante-pagamento";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
+  };
+
+  const pendingTotal = settlements
+    .filter((item) => item.status === "pending")
+    .reduce(
+      (total, item) => total + (item.driver_claimed_amount_cents ?? 0),
+      0,
+    );
+  const approvedTotal = settlements
+    .filter((item) => item.status === "approved")
+    .reduce((total, item) => total + (item.confirmed_amount_cents ?? 0), 0);
+  const paidTotal = settlements
+    .filter((item) => item.status === "paid")
+    .reduce((total, item) => total + (item.confirmed_amount_cents ?? 0), 0);
+
+  return (
+    <section className="freight-settlements space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-600">
+            Financeiro de fretes
+          </p>
+          <h2 className="mt-1 text-xl font-bold text-[#0b1d3a]">
+            Meus recebimentos
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Informe o valor de cada frete concluído e acompanhe a conferência e
+            o pagamento.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+        >
+          <ArrowLeft size={16} /> Voltar ao painel
+        </button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        {[
+          {
+            label: "Em conferência",
+            total: pendingTotal,
+            color: "text-amber-700",
+          },
+          { label: "A receber", total: approvedTotal, color: "text-blue-700" },
+          { label: "Recebido", total: paidTotal, color: "text-emerald-700" },
+        ].map((item) => (
+          <div
+            key={item.label}
+            className="rounded-xl border border-slate-200 bg-white p-4"
+          >
+            <p className="text-xs font-semibold text-slate-500">{item.label}</p>
+            <p className={`mt-1 text-lg font-bold ${item.color}`}>
+              {formatSettlementCents(item.total)}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {error && <p className="text-sm text-rose-600">{error}</p>}
+      {settlements.map((settlement) => {
+        const draft = drafts[settlement.id] ?? { amount: "", notes: "" };
+        const statusLabel = {
+          pending: settlement.driver_claimed_amount_cents
+            ? "Em conferência"
+            : "Informe o valor",
+          approved: "Aprovado · aguardando pagamento",
+          paid: "Pago",
+        }[settlement.status];
+        return (
+          <article
+            key={settlement.id}
+            className="rounded-xl border border-slate-200 bg-white p-4"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-[#0b1d3a]">
+                  {settlement.assignment.route.collection_point.name} →{" "}
+                  {settlement.assignment.route.final_customer.name}
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Concluído em{" "}
+                  {settlement.assignment.ended_at
+                    ? new Date(
+                        settlement.assignment.ended_at,
+                      ).toLocaleDateString("pt-BR")
+                    : "—"}
+                  {settlement.assignment.route.distance_km !== null &&
+                    ` · ${settlement.assignment.route.distance_km.toFixed(1)} km`}
+                </p>
+              </div>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                {statusLabel}
+              </span>
+            </div>
+            {settlement.status === "paid" && settlement.has_payment_proof && (
+              <button
+                type="button"
+                onClick={() => void downloadPaymentProof(settlement)}
+                className="mt-3 inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
+              >
+                Baixar comprovante
+              </button>
+            )}
+            <FreightChatHistory
+              routeId={settlement.assignment.route.id}
+              assignmentId={settlement.assignment.id}
+            />
+            <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_2fr_auto] sm:items-end">
+              <label className="text-xs font-semibold text-slate-600">
+                Valor que tem a receber (R$)
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  disabled={
+                    settlement.status !== "pending" ||
+                    savingId === settlement.id
+                  }
+                  value={draft.amount}
+                  onChange={(event) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [settlement.id]: { ...draft, amount: event.target.value },
+                    }))
+                  }
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:bg-slate-100"
+                />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">
+                Observação (opcional)
+                <input
+                  maxLength={1000}
+                  disabled={
+                    settlement.status !== "pending" ||
+                    savingId === settlement.id
+                  }
+                  value={draft.notes}
+                  onChange={(event) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [settlement.id]: { ...draft, notes: event.target.value },
+                    }))
+                  }
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:bg-slate-100"
+                />
+              </label>
+              {settlement.status === "pending" ? (
+                <button
+                  type="button"
+                  disabled={savingId === settlement.id}
+                  onClick={() => void saveClaim(settlement)}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#1052c7] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  <DollarSign size={16} />
+                  {savingId === settlement.id ? "Enviando..." : "Enviar valor"}
+                </button>
+              ) : (
+                <p className="text-sm font-bold text-[#0b1d3a]">
+                  Confirmado:{" "}
+                  {formatSettlementCents(settlement.confirmed_amount_cents)}
+                </p>
+              )}
+            </div>
+          </article>
+        );
+      })}
+      {!settlements.length && !error && (
+        <p className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-500">
+          Seus fretes concluídos aparecerão aqui para conferência dos valores.
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -1942,12 +1823,11 @@ function SettingsView({ onSignOut }: { onSignOut: () => void }) {
         </p>
       </div>
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        {items.map((item, i) => (
+        {items.map((item, index) => (
           <button
             key={item.label}
-            className={`flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-slate-50 ${
-              i < items.length - 1 ? "border-b border-slate-100" : ""
-            }`}
+            type="button"
+            className={`flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-slate-50 ${index < items.length - 1 ? "border-b border-slate-100" : ""}`}
           >
             <item.icon size={18} className="text-slate-500" />
             <span className="flex-1 text-sm font-medium text-slate-700">
@@ -1958,6 +1838,7 @@ function SettingsView({ onSignOut }: { onSignOut: () => void }) {
         ))}
       </div>
       <button
+        type="button"
         onClick={onSignOut}
         className="flex w-full items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 py-3.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-100"
       >
@@ -1993,9 +1874,9 @@ function BottomNav({ tab, setTab }: { tab: Tab; setTab: (tab: Tab) => void }) {
   const items: { key: Tab; label: string; icon: typeof Truck }[] = [
     { key: "home", label: "Início", icon: Zap },
     { key: "profile", label: "Perfil", icon: User },
-    { key: "history", label: "Carteira", icon: TrendingUp },
     { key: "routes", label: "Rotas", icon: RouteIcon },
-    { key: "negotiations", label: "Ofertas", icon: Bell },
+    { key: "recebimentos", label: "Fretes", icon: DollarSign },
+    { key: "chat", label: "Chat", icon: MessageCircle },
     { key: "settings", label: "Ajustes", icon: Settings },
   ];
   return (

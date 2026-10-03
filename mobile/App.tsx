@@ -1,19 +1,18 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as FileSystem from "expo-file-system/legacy";
 import * as Location from "expo-location";
-import * as Sharing from "expo-sharing";
 import * as TaskManager from "expo-task-manager";
 import {
   SafeAreaProvider,
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import logo from "./assets/logo.png";
 import {
   ActivityIndicator,
   Alert,
   AppState,
-  Linking,
+  BackHandler,
+  Pressable,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -24,13 +23,15 @@ import {
   View,
   Image,
 } from "react-native";
+import { DriverChat } from "./DriverChat";
 
 type MobileScreen =
   | "home"
   | "driver-data"
   | "vehicle"
-  | "history"
-  | "negotiations"
+  | "routes"
+  | "freights"
+  | "chat"
   | "settings";
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? "").replace(/\/$/, "");
@@ -52,6 +53,7 @@ async function apiFetch(path: string, init?: RequestInit) {
 
 type Driver = {
   id: string;
+  user_id?: string;
   full_name: string;
   cpf?: string | null;
   email: string | null;
@@ -84,20 +86,46 @@ type Driver = {
   homologation_status?: string;
 };
 
-type MobileNegotiation = {
+type DriverFreightSettlement = {
   id: string;
+  status: "pending" | "approved" | "paid";
+  driver_claimed_amount_cents: number | null;
+  confirmed_amount_cents: number | null;
+  driver_notes: string | null;
+  paid_at: string | null;
+  assignment: {
+    ended_at: string | null;
+    route: {
+      distance_km: number | null;
+      collection_point: { name: string };
+      final_customer: { name: string };
+    };
+  };
+};
+
+type DriverFreightRoute = {
+  id: string;
+  status: string;
+  distance_km: number | null;
   collection_point: { name: string } | null;
   final_customer: { name: string } | null;
-  cargo: string | null;
-  product: string | null;
-  quantity: string | null;
-  distance_km: number | null;
-  price_per_km: number | null;
-  current_value: number;
-  status: string;
-  offers: Array<{ id: string; amount: number; message: string | null }>;
-  messages: Array<{ id: string; body: string; created_at: string }>;
+  my_assignment: {
+    id: string;
+    status: "active" | "completed" | "cancelled";
+    progress_status:
+      | "assigned"
+      | "en_route_collection"
+      | "awaiting_collection_confirmation"
+      | "collection_confirmed"
+      | "en_route_customer"
+      | "awaiting_customer_confirmation"
+      | "completed";
+  } | null;
 };
+
+type DriverFreightProgress = NonNullable<
+  DriverFreightRoute["my_assignment"]
+>["progress_status"];
 
 const statusLabels: Record<string, string> = {
   available: "Disponível",
@@ -105,25 +133,7 @@ const statusLabels: Record<string, string> = {
   awaiting_documents: "Aguardando documentação",
   in_transit: "Frete em andamento",
   awaiting_unloading: "Aguardando descarga",
-  in_negotiation: "Em negociação",
   offline: "Offline",
-  pending: "Nova oferta",
-  countered: "Contraproposta",
-  accepted: "Aceita - aguardando início",
-  at_collection: "Chegou ao posto de coleta",
-  driver_completed: "Aguardando conferência da operação",
-  completed: "Frete finalizado",
-};
-
-const formatBRL = (value: number) =>
-  value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-const formatMoneyInput = (value: string) => {
-  const digits = value.replace(/\D/g, "");
-  return digits
-    ? (Number(digits) / 100).toLocaleString("pt-BR", {
-        minimumFractionDigits: 2,
-      })
-    : "";
 };
 
 async function sendLocation(location: Location.LocationObject) {
@@ -281,12 +291,7 @@ function AppContent() {
     "background" | "foreground" | null
   >(null);
   const [screen, setScreen] = useState<MobileScreen>("home");
-  const [negotiations, setNegotiations] = useState<MobileNegotiation[]>([]);
-  const [walletPreview, setWalletPreview] = useState<{
-    total: number;
-    pending: number;
-    completed_freights: number;
-  } | null>(null);
+  const seenOfferIds = useRef(new Set<string>());
 
   useEffect(() => {
     void restoreSession();
@@ -309,189 +314,65 @@ function AppContent() {
     return () => subscription.remove();
   }, [driver?.is_online, token, trackingMode]);
 
-  async function refreshNegotiations() {
-    if (!token) return;
-    try {
-      const response = await apiFetch("/api/negotiations", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) return;
-      const body = (await response.json()) as {
-        negotiations: MobileNegotiation[];
-      };
-      setNegotiations(body.negotiations);
-      await AsyncStorage.setItem(
-        "acneto-negotiations",
-        JSON.stringify(body.negotiations),
-      );
-    } catch {
-      // O cache local continua disponível quando a API estiver indisponível.
-    }
-  }
-
   useEffect(() => {
-    if (!token) return;
-    void AsyncStorage.getItem("acneto-negotiations").then((saved) => {
-      if (saved) setNegotiations(JSON.parse(saved) as MobileNegotiation[]);
-    });
-    void refreshNegotiations();
-    const refreshTimer = setInterval(() => void refreshNegotiations(), 2000);
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void refreshNegotiations();
-    });
-    return () => {
-      clearInterval(refreshTimer);
-      subscription.remove();
-    };
-  }, [token]);
-
-  useEffect(() => {
-    if (!token) return;
-    const loadWalletPreview = async () => {
-      const response = await apiFetch("/api/drivers/me/wallet", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (response.ok) {
+    if (!driver?.id || !token) return;
+    let active = true;
+    const checkFreightOffers = async () => {
+      if (!active || AppState.currentState !== "active") return;
+      try {
+        const response = await apiFetch(
+          `/api/drivers/${driver.id}/chat/messages`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (!response.ok) return;
         const body = (await response.json()) as {
-          summary: typeof walletPreview;
+          messages?: Array<{
+            body: string;
+            freight_offer?: { id: string; status: string } | null;
+          }>;
         };
-        setWalletPreview(body.summary);
+        const pendingOffers = (body.messages ?? []).filter(
+          (message) =>
+            message.freight_offer?.status === "offered" &&
+            !seenOfferIds.current.has(message.freight_offer.id),
+        );
+        for (const message of pendingOffers) {
+          const offerId = message.freight_offer?.id;
+          if (offerId) seenOfferIds.current.add(offerId);
+        }
+        if (pendingOffers.length > 0) {
+          Alert.alert(
+            "Nova oferta de frete",
+            pendingOffers[pendingOffers.length - 1].body,
+            [
+              { text: "Depois", style: "cancel" },
+              { text: "Ver oferta", onPress: () => setScreen("chat") },
+            ],
+          );
+        }
+      } catch {
+        // A próxima verificação tenta novamente quando a conexão voltar.
       }
     };
-    void loadWalletPreview();
-    const timer = setInterval(() => void loadWalletPreview(), 10000);
-    return () => clearInterval(timer);
-  }, [token]);
+    void checkFreightOffers();
+    const timer = setInterval(() => void checkFreightOffers(), 10000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [driver?.id, token]);
 
-  async function negotiationAction(
-    negotiationId: string,
-    action: "accept" | "reject",
-  ) {
-    if (!token) return;
-    const response = await apiFetch(
-      `/api/negotiations/${negotiationId}/${action}`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+  useEffect(() => {
+    if (screen !== "chat") return;
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => {
+        setScreen("home");
+        return true;
       },
     );
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string };
-      Alert.alert(
-        "Negociação",
-        body.error ?? "Não foi possível atualizar a negociação.",
-      );
-      return;
-    }
-    const driverResponse = await apiFetch("/api/drivers/me", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (driverResponse.ok) {
-      const body = (await driverResponse.json()) as { driver: Driver };
-      setDriver(body.driver);
-      await AsyncStorage.setItem(DRIVER_KEY, JSON.stringify(body.driver));
-    }
-    await refreshNegotiations();
-  }
-
-  async function sendNegotiationOffer(negotiationId: string, amount: number) {
-    if (!token || !Number.isFinite(amount) || amount <= 0) return;
-    const response = await apiFetch(
-      `/api/negotiations/${negotiationId}/offer`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ amount }),
-      },
-    );
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string };
-      Alert.alert(
-        "Negociação",
-        body.error ?? "Não foi possível enviar a contraproposta.",
-      );
-      return;
-    }
-    await refreshNegotiations();
-  }
-
-  async function sendNegotiationMessage(negotiationId: string, body: string) {
-    if (!token || !body.trim()) return;
-    const response = await apiFetch(
-      `/api/negotiations/${negotiationId}/messages`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ body: body.trim() }),
-      },
-    );
-    if (!response.ok) {
-      const result = (await response.json()) as { error?: string };
-      Alert.alert(
-        "Negociação",
-        result.error ?? "Não foi possível enviar a mensagem.",
-      );
-      return;
-    }
-    await refreshNegotiations();
-  }
-
-  async function openPaymentProof(data: string, name: string) {
-    try {
-      const base64 = data.split(",")[1] ?? data;
-      const safeName = name.replace(/[^a-z0-9._-]/gi, "_");
-      const uri = `${FileSystem.cacheDirectory}${safeName}`;
-      await FileSystem.writeAsStringAsync(uri, base64, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
-          dialogTitle: "Comprovante de pagamento",
-        });
-      } else {
-        await Linking.openURL(uri);
-      }
-    } catch {
-      Alert.alert(
-        "Comprovante",
-        "Não foi possível abrir o comprovante neste dispositivo.",
-      );
-    }
-  }
-
-  async function freightStep(
-    negotiationId: string,
-    step: "start" | "depart" | "arrive" | "finish",
-  ) {
-    if (!token) return;
-    const response = await apiFetch(
-      `/api/negotiations/${negotiationId}/freight/${step}`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      },
-    );
-    if (!response.ok) {
-      const body = (await response.json()) as { error?: string };
-      Alert.alert("Frete", body.error ?? "Não foi possível atualizar o frete.");
-      return;
-    }
-    const driverResponse = await apiFetch("/api/drivers/me", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (driverResponse.ok) {
-      const body = (await driverResponse.json()) as { driver: Driver };
-      setDriver(body.driver);
-      await AsyncStorage.setItem(DRIVER_KEY, JSON.stringify(body.driver));
-    }
-    await refreshNegotiations();
-  }
+    return () => subscription.remove();
+  }, [screen]);
 
   async function restoreSession() {
     try {
@@ -699,28 +580,18 @@ function AppContent() {
       />
     );
   }
-
-  if (screen === "history") {
+  if (screen === "routes") {
     return (
-      <WalletScreen
+      <DriverRoutesScreen
         token={token}
-        onBack={() => setScreen("home")}
         onNavigate={(nextScreen) => setScreen(nextScreen)}
-        onOpenProof={openPaymentProof}
       />
     );
   }
-
-  if (screen === "negotiations") {
+  if (screen === "freights") {
     return (
-      <NegotiationsScreen
-        negotiations={negotiations}
-        onBack={() => setScreen("home")}
-        onAccept={(id) => void negotiationAction(id, "accept")}
-        onReject={(id) => void negotiationAction(id, "reject")}
-        onOffer={(id, amount) => void sendNegotiationOffer(id, amount)}
-        onMessage={(id, body) => void sendNegotiationMessage(id, body)}
-        onFreightStep={(id, step) => void freightStep(id, step)}
+      <DriverFreightsScreen
+        token={token}
         onNavigate={(nextScreen) => setScreen(nextScreen)}
       />
     );
@@ -737,22 +608,488 @@ function AppContent() {
   }
 
   return (
-    <DriverHome
-      driver={driver}
-      submitting={submitting}
-      onToggle={toggleOnline}
-      onLogout={logout}
-      onOpenDriverData={() => setScreen("driver-data")}
-      onOpenVehicle={() => setScreen("vehicle")}
-      onOpenHistory={() => setScreen("history")}
-      onOpenNegotiations={() => setScreen("negotiations")}
-      onStatusChange={(status) => void updateDriverStatus(status)}
-      onNavigateScreen={(nextScreen) => setScreen(nextScreen)}
-      pendingNegotiations={
-        negotiations.filter((item) => item.status === "pending").length
+    <View style={{ flex: 1 }}>
+      <DriverHome
+        driver={driver}
+        submitting={submitting}
+        onToggle={toggleOnline}
+        onLogout={logout}
+        onOpenDriverData={() => setScreen("driver-data")}
+        onOpenVehicle={() => setScreen("vehicle")}
+        onOpenChat={() => setScreen("chat")}
+        onStatusChange={(status) => void updateDriverStatus(status)}
+        onNavigateScreen={(nextScreen) => setScreen(nextScreen)}
+      />
+      {screen === "chat" && (
+        <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+          <Pressable
+            accessibilityLabel="Minimizar chat"
+            onPress={() => setScreen("home")}
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: "rgba(2, 8, 23, 0.45)" },
+            ]}
+          />
+          <View
+            style={{
+              backgroundColor: "#f5f7fa",
+              borderTopLeftRadius: 18,
+              borderTopRightRadius: 18,
+              bottom: 0,
+              height: "82%",
+              left: 0,
+              overflow: "hidden",
+              position: "absolute",
+              right: 0,
+            }}
+          >
+            <DriverChat
+              driverId={driver.id}
+              driverUserId={driver.user_id ?? ""}
+              participantName="Operação"
+              token={token}
+              onBack={() => setScreen("home")}
+            />
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function DriverFreightsScreen({
+  token,
+  onNavigate,
+}: {
+  token: string;
+  onNavigate: (screen: MobileScreen) => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const [settlements, setSettlements] = useState<DriverFreightSettlement[]>([]);
+  const [amounts, setAmounts] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const response = await apiFetch("/api/driver/freight-settlements", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok)
+          throw new Error("Não foi possível carregar seus fretes.");
+        const body = (await response.json()) as {
+          settlements: DriverFreightSettlement[];
+        };
+        if (!active) return;
+        setSettlements(body.settlements);
+        setAmounts((current) => {
+          const next = { ...current };
+          for (const settlement of body.settlements) {
+            if (next[settlement.id] === undefined) {
+              next[settlement.id] = settlement.driver_claimed_amount_cents
+                ? (settlement.driver_claimed_amount_cents / 100).toFixed(2)
+                : "";
+            }
+          }
+          return next;
+        });
+        setNotes((current) => {
+          const next = { ...current };
+          for (const settlement of body.settlements) {
+            if (next[settlement.id] === undefined)
+              next[settlement.id] = settlement.driver_notes ?? "";
+          }
+          return next;
+        });
+        setError("");
+      } catch (cause) {
+        if (active) setError((cause as Error).message);
       }
-      walletPreview={walletPreview}
-    />
+    };
+    void load();
+    const timer = setInterval(() => void load(), 15000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [token]);
+
+  const saveClaim = async (settlement: DriverFreightSettlement) => {
+    const amountCents = Math.round(
+      Number((amounts[settlement.id] ?? "").replace(",", ".")) * 100,
+    );
+    if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+      setError("Informe um valor válido maior que zero.");
+      return;
+    }
+    setSavingId(settlement.id);
+    setError("");
+    try {
+      const response = await apiFetch(
+        `/api/driver/freight-settlements/${settlement.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            claimedAmountCents: amountCents,
+            driverNotes: notes[settlement.id] ?? "",
+          }),
+        },
+      );
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok)
+        throw new Error(body.error ?? "Não foi possível enviar o valor.");
+      setSettlements((current) =>
+        current.map((item) =>
+          item.id === settlement.id
+            ? { ...item, driver_claimed_amount_cents: amountCents }
+            : item,
+        ),
+      );
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const formatCents = (amount: number | null) =>
+    new Intl.NumberFormat("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    }).format((amount ?? 0) / 100);
+  const pendingTotal = settlements
+    .filter((item) => item.status === "pending")
+    .reduce(
+      (total, item) => total + (item.driver_claimed_amount_cents ?? 0),
+      0,
+    );
+  const approvedTotal = settlements
+    .filter((item) => item.status === "approved")
+    .reduce((total, item) => total + (item.confirmed_amount_cents ?? 0), 0);
+  const paidTotal = settlements
+    .filter((item) => item.status === "paid")
+    .reduce((total, item) => total + (item.confirmed_amount_cents ?? 0), 0);
+
+  return (
+    <SafeAreaView style={styles.safeLight}>
+      <StatusBar barStyle="light-content" />
+      <ScrollView
+        contentContainerStyle={[
+          styles.dataScreen,
+          { paddingBottom: 112 + insets.bottom },
+        ]}
+      >
+        <DataScreenHeader
+          title="Meus fretes"
+          onBack={() => onNavigate("home")}
+        />
+        <Text style={styles.infoText}>
+          Informe o valor dos fretes concluídos e acompanhe a conferência e o
+          pagamento.
+        </Text>
+        <View style={styles.dataCard}>
+          <View style={styles.dataRow}>
+            <Text style={styles.dataRowLabel}>A receber após conferência</Text>
+            <Text style={styles.dataRowValue}>
+              {formatCents(pendingTotal + approvedTotal)}
+            </Text>
+          </View>
+          <View style={styles.dataRow}>
+            <Text style={styles.dataRowLabel}>Em conferência</Text>
+            <Text style={styles.dataRowValue}>{formatCents(pendingTotal)}</Text>
+          </View>
+          <View style={styles.dataRow}>
+            <Text style={styles.dataRowLabel}>Já recebido</Text>
+            <Text style={styles.dataRowValue}>{formatCents(paidTotal)}</Text>
+          </View>
+        </View>
+        {error ? <Text style={{ color: "#dc2626" }}>{error}</Text> : null}
+        {settlements.map((settlement) => {
+          const statusLabel = {
+            pending: settlement.driver_claimed_amount_cents
+              ? "Em conferência"
+              : "Informe o valor",
+            approved: "Aprovado · aguardando pagamento",
+            paid: "Pago",
+          }[settlement.status];
+          const editable = settlement.status === "pending";
+          return (
+            <View key={settlement.id} style={styles.dataCard}>
+              <Text style={styles.dataRowLabel}>
+                {settlement.assignment.route.collection_point.name} →{"\n"}
+                {settlement.assignment.route.final_customer.name}
+              </Text>
+              <Text style={styles.infoText}>
+                {statusLabel}
+                {settlement.assignment.ended_at &&
+                  ` · ${new Date(settlement.assignment.ended_at).toLocaleDateString("pt-BR")}`}
+                {settlement.assignment.route.distance_km !== null &&
+                  ` · ${settlement.assignment.route.distance_km.toFixed(1)} km`}
+              </Text>
+              {editable ? (
+                <>
+                  <TextInput
+                    keyboardType="decimal-pad"
+                    editable={savingId !== settlement.id}
+                    placeholder="Valor a receber em R$"
+                    value={amounts[settlement.id] ?? ""}
+                    onChangeText={(value) =>
+                      setAmounts((current) => ({
+                        ...current,
+                        [settlement.id]: value,
+                      }))
+                    }
+                    style={styles.input}
+                  />
+                  <TextInput
+                    editable={savingId !== settlement.id}
+                    maxLength={1000}
+                    placeholder="Observação (opcional)"
+                    value={notes[settlement.id] ?? ""}
+                    onChangeText={(value) =>
+                      setNotes((current) => ({
+                        ...current,
+                        [settlement.id]: value,
+                      }))
+                    }
+                    style={styles.input}
+                  />
+                  <TouchableOpacity
+                    disabled={savingId === settlement.id}
+                    onPress={() => void saveClaim(settlement)}
+                    style={styles.primaryButton}
+                  >
+                    <Text style={styles.primaryButtonText}>
+                      {savingId === settlement.id
+                        ? "Enviando..."
+                        : "Enviar valor"}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <View style={styles.dataRow}>
+                  <Text style={styles.dataRowLabel}>Valor confirmado</Text>
+                  <Text style={styles.dataRowValue}>
+                    {formatCents(settlement.confirmed_amount_cents)}
+                  </Text>
+                </View>
+              )}
+              {settlement.status === "paid" && settlement.paid_at && (
+                <Text style={styles.infoText}>
+                  Pago em{" "}
+                  {new Date(settlement.paid_at).toLocaleDateString("pt-BR")}
+                </Text>
+              )}
+            </View>
+          );
+        })}
+        {!settlements.length && !error && (
+          <View style={styles.dataCard}>
+            <Text style={styles.infoText}>
+              Seus fretes concluídos aparecerão aqui.
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+      <MobileBottomNav screen="freights" onNavigate={onNavigate} />
+    </SafeAreaView>
+  );
+}
+
+function DriverRoutesScreen({
+  token,
+  onNavigate,
+}: {
+  token: string;
+  onNavigate: (screen: MobileScreen) => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const [routes, setRoutes] = useState<DriverFreightRoute[]>([]);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const load = async () => {
+    try {
+      const response = await apiFetch("/api/driver/routes", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok)
+        throw new Error("Não foi possível carregar seus fretes.");
+      const body = (await response.json()) as {
+        routes: DriverFreightRoute[];
+      };
+      setRoutes(body.routes);
+      setError("");
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    const timer = setInterval(() => void load(), 8000);
+    return () => clearInterval(timer);
+  }, [token]);
+
+  const advance = async (
+    routeId: string,
+    assignmentId: string,
+    action:
+      | "start_collection"
+      | "arrive_collection"
+      | "start_customer"
+      | "arrive_customer",
+  ) => {
+    setSavingId(assignmentId);
+    setError("");
+    try {
+      const response = await apiFetch(
+        `/api/freight-routes/${routeId}/assignments/${assignmentId}/progress`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ action }),
+        },
+      );
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok)
+        throw new Error(body.error ?? "Não foi possível atualizar o frete.");
+      await load();
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const labels: Record<DriverFreightProgress, string> = {
+    assigned: "Aguardando início da viagem",
+    en_route_collection: "A caminho do posto de coleta",
+    awaiting_collection_confirmation:
+      "Chegada ao posto aguardando confirmação da operação",
+    collection_confirmed: "Posto de coleta confirmado",
+    en_route_customer: "A caminho do cliente final",
+    awaiting_customer_confirmation:
+      "Chegada ao cliente aguardando confirmação da operação",
+    completed: "Frete concluído",
+  };
+  const nextActions: Partial<
+    Record<
+      DriverFreightProgress,
+      {
+        action:
+          | "start_collection"
+          | "arrive_collection"
+          | "start_customer"
+          | "arrive_customer";
+        label: string;
+      }
+    >
+  > = {
+    assigned: {
+      action: "start_collection",
+      label: "Iniciar · a caminho do posto",
+    },
+    en_route_collection: {
+      action: "arrive_collection",
+      label: "Cheguei ao posto de coleta",
+    },
+    collection_confirmed: {
+      action: "start_customer",
+      label: "A caminho do cliente final",
+    },
+    en_route_customer: {
+      action: "arrive_customer",
+      label: "Cheguei ao cliente final",
+    },
+  };
+
+  return (
+    <SafeAreaView style={styles.safeLight}>
+      <StatusBar barStyle="light-content" />
+      <ScrollView
+        contentContainerStyle={[
+          styles.dataScreen,
+          { paddingBottom: 112 + insets.bottom },
+        ]}
+      >
+        <DataScreenHeader
+          title="Minhas rotas"
+          onBack={() => onNavigate("home")}
+        />
+        <Text style={styles.infoText}>
+          Atualize cada etapa do frete. As chegadas precisam ser confirmadas
+          pela operação.
+        </Text>
+        {error ? <Text style={{ color: "#dc2626" }}>{error}</Text> : null}
+        {routes.map((route) => {
+          const assignment = route.my_assignment;
+          if (!assignment) return null;
+          const nextAction = nextActions[assignment.progress_status];
+          return (
+            <View key={route.id} style={styles.dataCard}>
+              <Text style={styles.dataRowLabel}>
+                {route.collection_point?.name ?? "Origem"} →{"\n"}
+                {route.final_customer?.name ?? "Destino"}
+              </Text>
+              {route.distance_km !== null && (
+                <Text style={styles.infoText}>
+                  Distância: {route.distance_km.toFixed(1)} km
+                </Text>
+              )}
+              <View style={styles.dataRow}>
+                <Text style={styles.dataRowValue}>
+                  {assignment.status === "cancelled"
+                    ? "Frete cancelado"
+                    : labels[assignment.progress_status]}
+                </Text>
+              </View>
+              {nextAction && assignment.status === "active" && (
+                <TouchableOpacity
+                  disabled={savingId === assignment.id}
+                  onPress={() =>
+                    void advance(route.id, assignment.id, nextAction.action)
+                  }
+                  style={styles.primaryButton}
+                >
+                  <Text style={styles.primaryButtonText}>
+                    {savingId === assignment.id
+                      ? "Atualizando..."
+                      : nextAction.label}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              {[
+                "awaiting_collection_confirmation",
+                "awaiting_customer_confirmation",
+              ].includes(assignment.progress_status) && (
+                <Text style={{ color: "#b45309", fontSize: 12, marginTop: 10 }}>
+                  Aguardando confirmação de chegada pela operação.
+                </Text>
+              )}
+            </View>
+          );
+        })}
+        {!routes.length && !error && (
+          <View style={styles.dataCard}>
+            <Text style={styles.infoText}>
+              Nenhuma rota atribuída no momento.
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+      <MobileBottomNav screen="routes" onNavigate={onNavigate} />
+    </SafeAreaView>
   );
 }
 
@@ -840,12 +1177,9 @@ function DriverHome({
   onLogout,
   onOpenDriverData,
   onOpenVehicle,
-  onOpenHistory,
-  onOpenNegotiations,
+  onOpenChat,
   onStatusChange,
   onNavigateScreen,
-  pendingNegotiations,
-  walletPreview,
 }: {
   driver: Driver;
   submitting: boolean;
@@ -853,16 +1187,9 @@ function DriverHome({
   onLogout: () => void;
   onOpenDriverData: () => void;
   onOpenVehicle: () => void;
-  onOpenHistory: () => void;
-  onOpenNegotiations: () => void;
+  onOpenChat: () => void;
   onStatusChange: (status: string) => void;
   onNavigateScreen: (screen: MobileScreen) => void;
-  pendingNegotiations: number;
-  walletPreview: {
-    total: number;
-    pending: number;
-    completed_freights: number;
-  } | null;
 }) {
   const insets = useSafeAreaInsets();
   const coordinates =
@@ -992,275 +1319,19 @@ function DriverHome({
         </View>
 
         <View style={styles.quickGrid}>
-          <TouchableOpacity
-            onPress={onOpenNegotiations}
-            style={styles.quickCard}
-          >
-            <Text style={styles.quickIcon}>$</Text>
-            <Text style={styles.quickTitle}>Negociações</Text>
-            <Text style={styles.quickSubtitle}>
-              {pendingNegotiations} proposta(s) pendente(s)
-            </Text>
+          <TouchableOpacity onPress={onOpenChat} style={styles.quickCard}>
+            <Text style={styles.quickIcon}>✉</Text>
+            <Text style={styles.quickTitle}>Chat com operação</Text>
+            <Text style={styles.quickSubtitle}>Converse com a central</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={onOpenVehicle} style={styles.quickCard}>
             <Text style={styles.quickIcon}>▣</Text>
             <Text style={styles.quickTitle}>Meu veículo</Text>
             <Text style={styles.quickSubtitle}>Dados e capacidade</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={onOpenHistory} style={styles.quickCard}>
-            <Text style={styles.quickIcon}>▤</Text>
-            <Text style={styles.quickTitle}>Histórico</Text>
-            <Text style={styles.quickSubtitle}>
-              {walletPreview?.completed_freights ?? 0} frete(s) concluído(s) ·{" "}
-              {formatBRL(walletPreview?.pending ?? 0)} a receber
-            </Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
       <MobileBottomNav screen="home" onNavigate={onNavigateScreen} />
-    </SafeAreaView>
-  );
-}
-
-function NegotiationsScreen({
-  negotiations,
-  onBack,
-  onAccept,
-  onReject,
-  onOffer,
-  onMessage,
-  onFreightStep,
-  onNavigate,
-}: {
-  negotiations: MobileNegotiation[];
-  onBack: () => void;
-  onAccept: (id: string) => void;
-  onReject: (id: string) => void;
-  onOffer: (id: string, amount: number) => void;
-  onMessage: (id: string, body: string) => void;
-  onFreightStep: (
-    id: string,
-    step: "start" | "depart" | "arrive" | "finish",
-  ) => void;
-  onNavigate: (screen: MobileScreen) => void;
-}) {
-  const insets = useSafeAreaInsets();
-  const [offerValues, setOfferValues] = useState<Record<string, string>>({});
-  const [messageValues, setMessageValues] = useState<Record<string, string>>(
-    {},
-  );
-  return (
-    <SafeAreaView style={styles.dataSafe}>
-      <StatusBar barStyle="light-content" />
-      <ScrollView
-        contentContainerStyle={[
-          styles.dataScreen,
-          { paddingBottom: 112 + insets.bottom },
-        ]}
-      >
-        <DataScreenHeader title="Negociações" onBack={onBack} />
-        {!negotiations.length ? (
-          <View style={styles.dataCard}>
-            <Text style={styles.infoText}>
-              Nenhuma negociação disponível no momento.
-            </Text>
-          </View>
-        ) : (
-          negotiations.map((negotiation) => {
-            const open =
-              negotiation.status === "pending" ||
-              negotiation.status === "countered";
-            const conversationOpen = [
-              "pending",
-              "countered",
-              "accepted",
-              "in_transit",
-              "at_collection",
-              "driver_completed",
-              "completed",
-            ].includes(negotiation.status);
-            return (
-              <View key={negotiation.id} style={styles.negotiationCard}>
-                <View style={styles.negotiationHeader}>
-                  <Text style={styles.negotiationTitle}>
-                    {negotiation.collection_point?.name ?? "Origem"}
-                  </Text>
-                  <Text style={styles.negotiationStatus}>
-                    {statusLabels[negotiation.status] ?? negotiation.status}
-                  </Text>
-                </View>
-                <Text style={styles.negotiationRoute}>
-                  → {negotiation.final_customer?.name ?? "Destino"}
-                </Text>
-                <Text style={styles.negotiationDetail}>
-                  {negotiation.product ??
-                    negotiation.cargo ??
-                    "Produto não informado"}{" "}
-                  · {negotiation.quantity ?? "Quantidade não informada"}
-                </Text>
-                <Text style={styles.negotiationDetail}>
-                  {negotiation.distance_km
-                    ? `${negotiation.distance_km.toFixed(2)} km`
-                    : "Distância não informada"}{" "}
-                  ·{" "}
-                  {negotiation.price_per_km
-                    ? `${formatBRL(negotiation.price_per_km)}/km`
-                    : "Tarifa não informada"}
-                </Text>
-                <Text style={styles.negotiationValue}>
-                  {formatBRL(negotiation.current_value)}
-                </Text>
-                {negotiation.status === "accepted" && (
-                  <TouchableOpacity
-                    onPress={() => onFreightStep(negotiation.id, "start")}
-                    style={styles.freightStartButton}
-                  >
-                    <Text style={styles.freightStartButtonText}>
-                      Iniciar frete
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                {negotiation.status === "awaiting_loading" && (
-                  <TouchableOpacity
-                    onPress={() => onFreightStep(negotiation.id, "depart")}
-                    style={styles.freightArriveButton}
-                  >
-                    <Text style={styles.freightActionText}>
-                      Carregamento realizado e iniciar viagem
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                {negotiation.status === "in_transit" && (
-                  <TouchableOpacity
-                    onPress={() => onFreightStep(negotiation.id, "finish")}
-                    style={styles.freightFinishButton}
-                  >
-                    <Text style={styles.freightActionText}>
-                      Finalizar viagem e enviar para conferência
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                {negotiation.messages.map((item) => (
-                  <Text key={item.id} style={styles.negotiationMessage}>
-                    {item.body}
-                  </Text>
-                ))}
-                {open && (
-                  <View style={styles.offerRow}>
-                    <TextInput
-                      placeholder="Mensagem para a operação"
-                      placeholderTextColor="#6f9bdc"
-                      value={messageValues[negotiation.id] ?? ""}
-                      onChangeText={(value) =>
-                        setMessageValues((current) => ({
-                          ...current,
-                          [negotiation.id]: value,
-                        }))
-                      }
-                      style={styles.offerInput}
-                    />
-                    <TouchableOpacity
-                      onPress={() => {
-                        onMessage(
-                          negotiation.id,
-                          messageValues[negotiation.id] ?? "",
-                        );
-                        setMessageValues((current) => ({
-                          ...current,
-                          [negotiation.id]: "",
-                        }));
-                      }}
-                      style={styles.offerButton}
-                    >
-                      <Text style={styles.offerButtonText}>Enviar</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {conversationOpen && !open && (
-                  <View style={styles.offerRow}>
-                    <TextInput
-                      placeholder="Mensagem para a operação"
-                      placeholderTextColor="#6f9bdc"
-                      value={messageValues[negotiation.id] ?? ""}
-                      onChangeText={(value) =>
-                        setMessageValues((current) => ({
-                          ...current,
-                          [negotiation.id]: value,
-                        }))
-                      }
-                      style={styles.offerInput}
-                    />
-                    <TouchableOpacity
-                      onPress={() => {
-                        onMessage(
-                          negotiation.id,
-                          messageValues[negotiation.id] ?? "",
-                        );
-                        setMessageValues((current) => ({
-                          ...current,
-                          [negotiation.id]: "",
-                        }));
-                      }}
-                      style={styles.offerButton}
-                    >
-                      <Text style={styles.offerButtonText}>Enviar</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {open && (
-                  <>
-                    <View style={styles.negotiationActions}>
-                      <TouchableOpacity
-                        onPress={() => onAccept(negotiation.id)}
-                        style={styles.acceptButton}
-                      >
-                        <Text style={styles.acceptButtonText}>Aceitar</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => onReject(negotiation.id)}
-                        style={styles.rejectButton}
-                      >
-                        <Text style={styles.rejectButtonText}>Recusar</Text>
-                      </TouchableOpacity>
-                    </View>
-                    <View style={styles.offerRow}>
-                      <TextInput
-                        keyboardType="decimal-pad"
-                        placeholder="Contraproposta"
-                        placeholderTextColor="#6f9bdc"
-                        value={offerValues[negotiation.id] ?? ""}
-                        onChangeText={(value) =>
-                          setOfferValues((current) => ({
-                            ...current,
-                            [negotiation.id]: formatMoneyInput(value),
-                          }))
-                        }
-                        style={styles.offerInput}
-                      />
-                      <TouchableOpacity
-                        onPress={() =>
-                          onOffer(
-                            negotiation.id,
-                            Number(
-                              (offerValues[negotiation.id] ?? "")
-                                .replace(/\./g, "")
-                                .replace(",", "."),
-                            ),
-                          )
-                        }
-                        style={styles.offerButton}
-                      >
-                        <Text style={styles.offerButtonText}>Enviar</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </>
-                )}
-              </View>
-            );
-          })
-        )}
-      </ScrollView>
-      <MobileBottomNav screen="negotiations" onNavigate={onNavigate} />
     </SafeAreaView>
   );
 }
@@ -1276,8 +1347,9 @@ function MobileBottomNav({
   const items = [
     ["home", "⌂", "Início"],
     ["driver-data", "♙", "Perfil"],
-    ["history", "◷", "Carteira"],
-    ["negotiations", "♢", "Ofertas"],
+    ["routes", "↗", "Rotas"],
+    ["freights", "$", "Fretes"],
+    ["chat", "✉", "Chat"],
     ["settings", "⚙", "Ajustes"],
   ] as const;
   return (
@@ -1338,8 +1410,8 @@ function SettingsScreen({
             <Text style={styles.settingsActionText}>Sair da conta</Text>
           </TouchableOpacity>
           <Text style={styles.settingsInfo}>
-            A localização e as negociações são sincronizadas com a operação
-            quando o aplicativo está online.
+            A localização e as mensagens são sincronizadas com a operação quando
+            o aplicativo está online.
           </Text>
         </View>
       </ScrollView>
@@ -1695,164 +1767,6 @@ function VehicleScreen({
         </View>
       </ScrollView>
       <MobileBottomNav screen="vehicle" onNavigate={onNavigate} />
-    </SafeAreaView>
-  );
-}
-
-function WalletScreen({
-  token,
-  onBack,
-  onNavigate,
-  onOpenProof,
-}: {
-  token: string;
-  onBack: () => void;
-  onNavigate: (screen: MobileScreen) => void;
-  onOpenProof: (data: string, name: string) => Promise<void>;
-}) {
-  const insets = useSafeAreaInsets();
-  const [wallet, setWallet] = useState<{
-    summary: {
-      total: number;
-      pending: number;
-      paid: number;
-      completed_freights: number;
-    };
-    entries: Array<{
-      id: string;
-      amount: number;
-      status: string;
-      company?: { name?: string; legal_name?: string } | null;
-      payment_proof_name?: string | null;
-      payment_proof_data?: string | null;
-      created_at: string;
-      negotiation?: {
-        collection_point?: { name?: string } | null;
-        final_customer?: { name?: string } | null;
-      } | null;
-    }>;
-  } | null>(null);
-  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    void apiFetch("/api/drivers/me/wallet", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(async (response) => {
-        if (!response.ok || !active) return;
-        setWallet((await response.json()) as typeof wallet);
-      })
-      .catch(() => undefined);
-    return () => {
-      active = false;
-    };
-  }, [token]);
-
-  const money = (value: number) =>
-    `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
-  return (
-    <SafeAreaView style={styles.dataSafe}>
-      <StatusBar barStyle="light-content" />
-      <ScrollView
-        contentContainerStyle={[
-          styles.dataScreen,
-          { paddingBottom: 112 + insets.bottom },
-        ]}
-      >
-        <DataScreenHeader title="Minha carteira" onBack={onBack} />
-        <View style={styles.walletSummary}>
-          <DataRow
-            label="Total concluído"
-            value={money(wallet?.summary.total ?? 0)}
-          />
-          <DataRow
-            label="A receber"
-            value={money(wallet?.summary.pending ?? 0)}
-            accent
-          />
-          <DataRow
-            label="Fretes concluídos"
-            value={String(wallet?.summary.completed_freights ?? 0)}
-          />
-        </View>
-        <Text style={styles.dataSectionLabel}>FRETES CONCLUÍDOS</Text>
-        {!wallet && <Text style={styles.infoText}>Carregando carteira...</Text>}
-        {wallet?.entries.map((entry) => (
-          <TouchableOpacity
-            key={entry.id}
-            activeOpacity={0.8}
-            onPress={() =>
-              setSelectedEntryId((current) =>
-                current === entry.id ? null : entry.id,
-              )
-            }
-            style={styles.walletEntry}
-          >
-            <View style={styles.walletEntryHeader}>
-              <View style={styles.walletEntryCopy}>
-                <Text style={styles.walletEntryRoute}>
-                  {entry.negotiation?.collection_point?.name ?? "Origem"} →{" "}
-                  {entry.negotiation?.final_customer?.name ?? "Destino"}
-                </Text>
-                <Text style={styles.walletEntryDate}>
-                  {new Date(entry.created_at).toLocaleDateString("pt-BR")}
-                </Text>
-              </View>
-              <View>
-                <Text style={styles.walletEntryAmount}>
-                  {money(entry.amount)}
-                </Text>
-                <Text style={styles.walletEntryStatus}>
-                  {entry.status === "paid"
-                    ? "Pago"
-                    : entry.status === "approved"
-                      ? "Pagamento aprovado"
-                      : entry.status === "rejected"
-                        ? "Devolvido para conferência"
-                        : "Aguardando conferência"}
-                </Text>
-              </View>
-            </View>
-            {selectedEntryId === entry.id && (
-              <View style={styles.walletDetails}>
-                <Text style={styles.walletEntryDate}>
-                  Empresa:{" "}
-                  {entry.company?.name ??
-                    entry.company?.legal_name ??
-                    "Autônomo"}
-                </Text>
-                <Text style={styles.walletEntryDate}>
-                  Status:{" "}
-                  {entry.status === "paid"
-                    ? "Pagamento realizado"
-                    : "Aguardando pagamento"}
-                </Text>
-                {entry.status === "paid" &&
-                  entry.payment_proof_name &&
-                  entry.payment_proof_data && (
-                    <TouchableOpacity
-                      onPress={() => {
-                        void onOpenProof(
-                          entry.payment_proof_data!,
-                          entry.payment_proof_name!,
-                        );
-                      }}
-                    >
-                      <Text style={styles.walletProofLink}>
-                        Abrir comprovante: {entry.payment_proof_name}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-              </View>
-            )}
-          </TouchableOpacity>
-        ))}
-        {wallet?.entries.length === 0 && (
-          <Text style={styles.infoText}>Nenhum frete concluído.</Text>
-        )}
-      </ScrollView>
-      <MobileBottomNav screen="history" onNavigate={onNavigate} />
     </SafeAreaView>
   );
 }

@@ -181,3 +181,34 @@ html.dark .theme-toggle:hover {
   background-color: #334155;
   color: #fff;
 }
+
+html.dark .freight-settlements .text-slate-600,
+html.dark .freight-settlements .text-slate-700 {
+  color: #cbd5e1;
+}
+
+html.dark .freight-settlements .freight-settlement-card {
+  background-color: #1f2937;
+  border-color: #475569;
+}
+
+html.dark .freight-settlements input,
+html.dark .freight-settlements select {
+  background-color: #111827;
+  border-color: #475569;
+  color: #f1f5f9;
+}
+
+html.dark .freight-settlements input:disabled {
+  background-color: #273449 !important;
+  color: #e2e8f0 !important;
+  opacity: 1;
+}
+
+html.dark .freight-settlements input[type="file"] {
+  color: #cbd5e1;
+}
+
+html.dark .freight-settlements .text-slate-500 {
+  color: #a8b8cc;
+}

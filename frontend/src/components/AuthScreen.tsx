@@ -426,7 +426,7 @@ export function AuthScreen() {
               </button>
             </div>
             <form onSubmit={handleSubmit} className="mt-4 space-y-2.5">
-              <div className="grid grid-cols-3 gap-2 rounded-xl bg-slate-100 p-1">
+              <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1">
                 <button
                   type="button"
                   onClick={() => setRequestedRole("driver")}
@@ -440,13 +440,6 @@ export function AuthScreen() {
                   className={`rounded-lg px-3 py-2 text-sm font-semibold ${requestedRole === "carrier" ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
                 >
                   Transportadora
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRequestedRole("client")}
-                  className={`rounded-lg px-3 py-2 text-sm font-semibold ${requestedRole === "client" ? "bg-white text-[#0b1d3a] shadow-sm" : "text-slate-500"}`}
-                >
-                  Cliente
                 </button>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">

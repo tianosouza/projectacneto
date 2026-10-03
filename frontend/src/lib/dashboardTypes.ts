@@ -148,8 +148,6 @@ export type DirectoryOperator = {
   email: string;
   phone: string | null;
   role: string;
-  finance_enabled?: boolean;
-  negotiations_enabled?: boolean;
 };
 
 export type RouteSummary = {
@@ -177,8 +175,40 @@ export type FreightRouteAssignment = {
   driver: DemoDriver | null;
   capacity: string | null;
   status: "active" | "completed" | "cancelled";
+  progress_status:
+    | "assigned"
+    | "en_route_collection"
+    | "awaiting_collection_confirmation"
+    | "collection_confirmed"
+    | "en_route_customer"
+    | "awaiting_customer_confirmation"
+    | "completed";
   accepted_at: string;
   ended_at: string | null;
+  collection_arrived_at: string | null;
+  collection_confirmed_at: string | null;
+  customer_arrived_at: string | null;
+  customer_confirmed_at: string | null;
+  chat_offer: FreightChatOffer | null;
+};
+
+export type FreightChatOffer = {
+  id: string;
+  route_id: string;
+  driver_id: string;
+  driver: { id: string; full_name: string } | null;
+  created_by: { id: string; full_name: string | null; email: string } | null;
+  amount_cents: number;
+  status: "offered" | "accepted" | "rejected" | "completed" | "superseded";
+  created_at: string;
+  responded_at: string | null;
+  accepted_assignment_id: string | null;
+  route?: {
+    id: string;
+    distance_km: number | null;
+    collection_point: OperationalLocation | null;
+    final_customer: OperationalLocation | null;
+  } | null;
 };
 
 export type FreightRoute = {
@@ -189,14 +219,10 @@ export type FreightRoute = {
   collection_point: OperationalLocation | null;
   final_customer_id: string;
   final_customer: OperationalLocation | null;
-  total_capacity: string;
-  cargo: string | null;
-  product: string | null;
-  notes: string | null;
   distance_km: number | null;
   status: FreightRouteStatus;
-  scheduled_at: string | null;
   assignments: FreightRouteAssignment[];
+  chat_offers: FreightChatOffer[];
   active_driver_count: number;
   created_at: string;
   updated_at: string;
@@ -224,4 +250,35 @@ export type FreightRouteDashboard = {
     route_count: number;
   }>;
   daily_series: Array<{ date: string; count: number }>;
+};
+
+export type FreightSettlement = {
+  id: string;
+  assignment_id: string;
+  driver_claimed_amount_cents: number | null;
+  confirmed_amount_cents: number | null;
+  driver_notes: string | null;
+  operations_notes: string | null;
+  payment_reference: string | null;
+  payment_proof_file_name: string | null;
+  payment_proof_mime_type: string | null;
+  has_payment_proof: boolean;
+  status: "pending" | "approved" | "paid";
+  approved_at: string | null;
+  paid_at: string | null;
+  created_at: string;
+  updated_at: string;
+  assignment: {
+    id: string;
+    status: string;
+    accepted_at: string;
+    ended_at: string | null;
+    driver: { id: string; full_name: string };
+    route: {
+      id: string;
+      distance_km: number | null;
+      collection_point: OperationalLocation;
+      final_customer: OperationalLocation;
+    };
+  };
 };

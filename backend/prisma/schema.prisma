@@ -22,11 +22,9 @@ model User {
   registrationAttachments RegistrationAttachment[]
   changeRequests AccountChangeRequest[]
   passwordResetTokens PasswordResetToken[]
-  createdNegotiations FreightNegotiation[] @relation("NegotiationCreator")
-  negotiationOffers FreightNegotiationOffer[]
-  negotiationMessages FreightNegotiationMessage[]
-  reviewedWalletEntries DriverWalletEntry[] @relation("WalletReview")
+  driverChatMessages DriverChatMessage[]
   createdFreightRoutes FreightRoute[] @relation("FreightRouteCreator")
+  createdFreightOffers FreightChatOffer[] @relation("FreightChatOfferCreator")
 }
 
 model Profile {
@@ -40,8 +38,6 @@ model Profile {
   approved  Boolean  @default(false)
   approvalClosed Boolean @default(false)
   mustChangePassword Boolean @default(false)
-  financeEnabled Boolean @default(false)
-  negotiationsEnabled Boolean @default(false)
   isSuperAdmin Boolean @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -105,14 +101,30 @@ model Driver {
   vehicleAssignments VehicleDriverAssignment[]
   carrierLinks DriverCarrierLink[]
   documents HomologationDocument[]
-  negotiations FreightNegotiation[]
-  walletEntries DriverWalletEntry[]
+  chatMessages DriverChatMessage[]
   routeAssignments FreightRouteAssignment[]
+  freightOffers FreightChatOffer[]
 
   @@index([status])
   @@index([isOnline])
   @@index([city, state])
   @@index([availabilitySince])
+}
+
+model DriverChatMessage {
+  id        String   @id @default(cuid())
+  driverId  String
+  userId    String
+  freightOfferId String? @unique
+  body      String
+  createdAt DateTime @default(now())
+
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  sender User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  freightOffer FreightChatOffer? @relation(fields: [freightOfferId], references: [id], onDelete: SetNull)
+
+  @@index([driverId, createdAt])
+  @@index([userId, createdAt])
 }
 
 model OperationalLocation {
@@ -130,8 +142,6 @@ model OperationalLocation {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  collectionNegotiations FreightNegotiation[] @relation("CollectionNegotiations")
-  customerNegotiations   FreightNegotiation[] @relation("CustomerNegotiations")
   companyAccesses        OperationalLocationCompanyAccess[]
   collectionRoutes       FreightRoute[] @relation("FreightRouteCollectionPoint")
   customerRoutes         FreightRoute[] @relation("FreightRouteFinalCustomer")
@@ -151,68 +161,6 @@ model OperationalLocationCompanyAccess {
 
   @@unique([locationId, companyId])
   @@index([companyId])
-}
-
-model FreightNegotiation {
-  id                String   @id @default(cuid())
-  driverId          String
-  createdByUserId   String
-  collectionPointId String
-  finalCustomerId   String
-  cargo             String?
-  product           String?
-  quantity          String?
-  cteNumber        String?
-  documentsReleased Boolean  @default(false)
-  loadingScheduledAt DateTime?
-  distanceKm        Float?
-  pricePerKm        Float?
-  initialValue      Float
-  currentValue      Float
-  status            String   @default("pending")
-  expiresAt         DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  driver          Driver             @relation(fields: [driverId], references: [id], onDelete: Cascade)
-  createdBy       User               @relation("NegotiationCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
-  collectionPoint OperationalLocation @relation("CollectionNegotiations", fields: [collectionPointId], references: [id], onDelete: Restrict)
-  finalCustomer   OperationalLocation @relation("CustomerNegotiations", fields: [finalCustomerId], references: [id], onDelete: Restrict)
-  offers          FreightNegotiationOffer[]
-  messages        FreightNegotiationMessage[]
-  walletEntry     DriverWalletEntry?
-
-  @@index([driverId, status])
-  @@index([createdByUserId, status])
-  @@index([status, updatedAt])
-}
-
-model FreightNegotiationOffer {
-  id            String   @id @default(cuid())
-  negotiationId String
-  userId        String
-  amount        Float
-  message       String?
-  status        String   @default("pending")
-  createdAt     DateTime @default(now())
-
-  negotiation FreightNegotiation @relation(fields: [negotiationId], references: [id], onDelete: Cascade)
-  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([negotiationId, createdAt])
-}
-
-model FreightNegotiationMessage {
-  id            String   @id @default(cuid())
-  negotiationId String
-  userId        String
-  body          String
-  createdAt     DateTime @default(now())
-
-  negotiation FreightNegotiation @relation(fields: [negotiationId], references: [id], onDelete: Cascade)
-  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([negotiationId, createdAt])
 }
 
 model AccountChangeRequest {
@@ -258,7 +206,6 @@ model TransportCompany {
   profiles Profile[]
   vehicles Vehicle[] @relation("CompanyVehicles")
   driverLinks DriverCarrierLink[]
-  walletEntries DriverWalletEntry[]
   documents HomologationDocument[]
   locationAccesses OperationalLocationCompanyAccess[]
 
@@ -359,13 +306,8 @@ model FreightRoute {
   createdByUserId   String
   collectionPointId String
   finalCustomerId   String
-  totalCapacity     String
-  cargo             String?
-  product           String?
-  notes             String?
   distanceKm        Float?
   status            String    @default("open") // open, assigned, in_progress, completed, cancelled
-  scheduledAt       DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -373,6 +315,7 @@ model FreightRoute {
   collectionPoint OperationalLocation @relation("FreightRouteCollectionPoint", fields: [collectionPointId], references: [id], onDelete: Restrict)
   finalCustomer   OperationalLocation @relation("FreightRouteFinalCustomer", fields: [finalCustomerId], references: [id], onDelete: Restrict)
   assignments     FreightRouteAssignment[]
+  chatOffers      FreightChatOffer[]
 
   @@index([status, createdAt])
   @@index([collectionPointId])
@@ -385,38 +328,62 @@ model FreightRouteAssignment {
   driverId   String
   capacity   String?
   status     String    @default("active") // active, completed, cancelled
+  progressStatus String @default("assigned") // assigned, en_route_collection, awaiting_collection_confirmation, collection_confirmed, en_route_customer, awaiting_customer_confirmation, completed
   acceptedAt DateTime  @default(now())
   endedAt    DateTime?
+  collectionArrivedAt DateTime?
+  collectionConfirmedAt DateTime?
+  customerArrivedAt DateTime?
+  customerConfirmedAt DateTime?
 
   route  FreightRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
   driver Driver       @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  settlement FreightSettlement?
+  chatOffer FreightChatOffer?
 
   @@index([routeId, status])
   @@index([driverId, status])
 }
 
-model DriverWalletEntry {
-  id             String   @id @default(cuid())
-  driverId       String
-  negotiationId  String   @unique
-  companyId      String?
-  amount         Float
-  status         String   @default("pending_review")
-  paymentNote    String?
-  paymentProofName String?
-  paymentProofData String?
-  reviewedById   String?
-  reviewedAt     DateTime?
-  paidAt         DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+model FreightChatOffer {
+  id                   String   @id @default(cuid())
+  routeId              String
+  driverId             String
+  createdByUserId      String
+  amountCents          Int
+  status               String   @default("offered") // offered, accepted, rejected, completed
+  createdAt            DateTime @default(now())
+  respondedAt          DateTime?
+  acceptedAssignmentId String?  @unique
 
-  driver       Driver           @relation(fields: [driverId], references: [id], onDelete: Cascade)
-  negotiation  FreightNegotiation @relation(fields: [negotiationId], references: [id], onDelete: Cascade)
-  company      TransportCompany? @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  reviewedBy   User?             @relation("WalletReview", fields: [reviewedById], references: [id], onDelete: SetNull)
+  route               FreightRoute          @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  driver              Driver                @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  createdBy           User                  @relation("FreightChatOfferCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  message             DriverChatMessage?
+  acceptedAssignment  FreightRouteAssignment? @relation(fields: [acceptedAssignmentId], references: [id], onDelete: SetNull)
 
-  @@index([driverId, status])
-  @@index([companyId, status])
-  @@index([createdAt])
+  @@index([driverId, status, createdAt])
+  @@index([routeId, createdAt])
+}
+
+model FreightSettlement {
+  id                           String   @id @default(cuid())
+  assignmentId                 String   @unique
+  driverClaimedAmountCents     Int?
+  confirmedAmountCents         Int?
+  driverNotes                  String?
+  operationsNotes              String?
+  paymentReference             String?
+  paymentProofFileName         String?
+  paymentProofMimeType         String?
+  paymentProofDataBase64       String?
+  status                       String   @default("pending") // pending, approved, paid
+  approvedAt                   DateTime?
+  paidAt                       DateTime?
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+
+  assignment FreightRouteAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@index([status, updatedAt])
 }
