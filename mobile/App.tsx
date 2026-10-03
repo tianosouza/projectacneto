@@ -66,6 +66,8 @@ type Driver = {
   longitude: number | null;
   last_seen: string | null;
   status: string;
+  availability_city?: string | null;
+  availability_at?: string | null;
   vehicle_model: string | null;
   plate: string | null;
   capacity: string | null;
@@ -317,8 +319,11 @@ function AppContent() {
   useEffect(() => {
     if (!driver?.id || !token) return;
     let active = true;
+    let requestInFlight = false;
     const checkFreightOffers = async () => {
-      if (!active || AppState.currentState !== "active") return;
+      if (!active || AppState.currentState !== "active" || requestInFlight)
+        return;
+      requestInFlight = true;
       try {
         const response = await apiFetch(
           `/api/drivers/${driver.id}/chat/messages`,
@@ -352,13 +357,22 @@ function AppContent() {
         }
       } catch {
         // A próxima verificação tenta novamente quando a conexão voltar.
+      } finally {
+        requestInFlight = false;
       }
     };
     void checkFreightOffers();
-    const timer = setInterval(() => void checkFreightOffers(), 10000);
+    const timer = setInterval(() => void checkFreightOffers(), 5000);
+    const appStateSubscription = AppState.addEventListener(
+      "change",
+      (state) => {
+        if (state === "active") void checkFreightOffers();
+      },
+    );
     return () => {
       active = false;
       clearInterval(timer);
+      appStateSubscription.remove();
     };
   }, [driver?.id, token]);
 
@@ -426,8 +440,11 @@ function AppContent() {
     }
   }
 
-  async function toggleOnline(value: boolean) {
-    if (!driver || !token) return;
+  async function toggleOnline(
+    value: boolean,
+    availability?: { city: string; at: string },
+  ): Promise<boolean> {
+    if (!driver || !token || (value && !availability)) return false;
     setSubmitting(true);
     try {
       if (value) setTrackingMode(await startLocationTracking());
@@ -442,16 +459,29 @@ function AppContent() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ isOnline: value, status }),
+        body: JSON.stringify({
+          isOnline: value,
+          status,
+          ...(availability && {
+            availabilityCity: availability.city,
+            availabilityAt: availability.at,
+          }),
+        }),
       });
       if (!response.ok)
         throw new Error("Não foi possível atualizar seu status.");
       const body = (await response.json()) as { driver: Driver };
       setDriver(body.driver);
       await AsyncStorage.setItem(DRIVER_KEY, JSON.stringify(body.driver));
+      return true;
     } catch (error) {
-      Alert.alert("Localização necessária", (error as Error).message);
+      Alert.alert(
+        "Não foi possível atualizar o status",
+        (error as Error).message,
+      );
       if (value) await stopLocationTracking().catch(() => undefined);
+      if (value) setTrackingMode(null);
+      return false;
     } finally {
       setSubmitting(false);
     }
@@ -1183,7 +1213,10 @@ function DriverHome({
 }: {
   driver: Driver;
   submitting: boolean;
-  onToggle: (value: boolean) => void;
+  onToggle: (
+    value: boolean,
+    availability?: { city: string; at: string },
+  ) => Promise<boolean>;
   onLogout: () => void;
   onOpenDriverData: () => void;
   onOpenVehicle: () => void;
@@ -1192,10 +1225,46 @@ function DriverHome({
   onNavigateScreen: (screen: MobileScreen) => void;
 }) {
   const insets = useSafeAreaInsets();
+  const [availabilityFormOpen, setAvailabilityFormOpen] = useState(false);
+  const [availabilityCity, setAvailabilityCity] = useState("");
+  const [availabilityDate, setAvailabilityDate] = useState("");
+  const [availabilityTime, setAvailabilityTime] = useState("");
   const coordinates =
     driver.latitude !== null && driver.longitude !== null
       ? `${driver.latitude.toFixed(5)}, ${driver.longitude.toFixed(5)}`
       : "Aguardando primeira posição";
+
+  function openAvailabilityForm() {
+    const now = new Date();
+    const pad = (value: number) => String(value).padStart(2, "0");
+    setAvailabilityCity(driver.availability_city ?? driver.city ?? "");
+    setAvailabilityDate(
+      `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    );
+    setAvailabilityTime(`${pad(now.getHours())}:${pad(now.getMinutes())}`);
+    setAvailabilityFormOpen(true);
+  }
+
+  async function confirmAvailability() {
+    const at = new Date(`${availabilityDate}T${availabilityTime}`);
+    if (
+      !availabilityCity.trim() ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(availabilityDate) ||
+      !/^\d{2}:\d{2}$/.test(availabilityTime) ||
+      !Number.isFinite(at.getTime())
+    ) {
+      Alert.alert(
+        "Disponibilidade",
+        "Informe uma cidade, data e hora válidas.",
+      );
+      return;
+    }
+    const activated = await onToggle(true, {
+      city: availabilityCity.trim(),
+      at: at.toISOString(),
+    });
+    if (activated) setAvailabilityFormOpen(false);
+  }
 
   return (
     <SafeAreaView style={styles.safeLight}>
@@ -1221,7 +1290,10 @@ function DriverHome({
 
         <TouchableOpacity
           disabled={submitting}
-          onPress={() => onToggle(!driver.is_online)}
+          onPress={() => {
+            if (driver.is_online) void onToggle(false);
+            else openAvailabilityForm();
+          }}
           style={[
             styles.availabilityHero,
             driver.is_online && styles.availabilityActive,
@@ -1286,6 +1358,65 @@ function DriverHome({
               : ""}
           </Text>
         </TouchableOpacity>
+
+        {availabilityFormOpen && !driver.is_online && (
+          <View style={styles.availabilityForm}>
+            <Text style={styles.availabilityFormTitle}>
+              Previsão para ficar disponível
+            </Text>
+            <TextInput
+              accessibilityLabel="Cidade de disponibilidade"
+              autoCapitalize="words"
+              onChangeText={setAvailabilityCity}
+              placeholder="Cidade"
+              placeholderTextColor="#718096"
+              style={styles.availabilityInput}
+              value={availabilityCity}
+            />
+            <View style={styles.availabilityInputRow}>
+              <TextInput
+                accessibilityLabel="Data de disponibilidade"
+                keyboardType="numbers-and-punctuation"
+                onChangeText={setAvailabilityDate}
+                placeholder="AAAA-MM-DD"
+                placeholderTextColor="#718096"
+                style={[styles.availabilityInput, styles.availabilityInputHalf]}
+                value={availabilityDate}
+              />
+              <TextInput
+                accessibilityLabel="Hora de disponibilidade"
+                keyboardType="numbers-and-punctuation"
+                onChangeText={setAvailabilityTime}
+                placeholder="HH:MM"
+                placeholderTextColor="#718096"
+                style={[styles.availabilityInput, styles.availabilityInputHalf]}
+                value={availabilityTime}
+              />
+            </View>
+            <View style={styles.availabilityActions}>
+              <TouchableOpacity
+                disabled={submitting}
+                onPress={() => setAvailabilityFormOpen(false)}
+                style={styles.availabilityCancelButton}
+              >
+                <Text style={styles.availabilityCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={submitting}
+                onPress={() => void confirmAvailability()}
+                style={styles.availabilityConfirmButton}
+              >
+                {submitting ? (
+                  <ActivityIndicator color="#07399f" />
+                ) : (
+                  <Text style={styles.availabilityConfirmText}>
+                    Ficar online
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         <View style={styles.statusListCard}>
           <Text style={styles.statusListTitle}>MEU STATUS ATUAL</Text>
@@ -2017,6 +2148,53 @@ const styles = StyleSheet.create({
     fontSize: 10,
     marginTop: 16,
     textAlign: "center",
+  },
+  availabilityForm: {
+    backgroundColor: "#062c83",
+    borderColor: "#2251ad",
+    borderWidth: 1,
+    marginTop: 12,
+    padding: 14,
+  },
+  availabilityFormTitle: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "800",
+    marginBottom: 10,
+  },
+  availabilityInput: {
+    backgroundColor: "#07399f",
+    borderColor: "#4274cf",
+    borderWidth: 1,
+    color: "#fff",
+    fontSize: 14,
+    marginBottom: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  availabilityInputRow: { flexDirection: "row", gap: 8 },
+  availabilityInputHalf: { flex: 1 },
+  availabilityActions: { flexDirection: "row", gap: 8, marginTop: 4 },
+  availabilityCancelButton: {
+    alignItems: "center",
+    borderColor: "#4274cf",
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 44,
+  },
+  availabilityCancelText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  availabilityConfirmButton: {
+    alignItems: "center",
+    backgroundColor: "#fff000",
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 44,
+  },
+  availabilityConfirmText: {
+    color: "#07399f",
+    fontSize: 12,
+    fontWeight: "900",
   },
   statusListCard: {
     backgroundColor: "#062c83",
