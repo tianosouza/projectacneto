@@ -255,7 +255,7 @@ function NewRouteModal({
   const [form, setForm] = useState({
     collectionPointId: "",
     finalCustomerId: "",
-    notifyNearestDriver: true,
+    notifyNearestDriver: false,
     amount: "",
   });
   const [error, setError] = useState("");
@@ -268,7 +268,7 @@ function NewRouteModal({
     setForm({
       collectionPointId: "",
       finalCustomerId: "",
-      notifyNearestDriver: true,
+      notifyNearestDriver: false,
       amount: "",
     });
     setError("");
@@ -390,10 +390,11 @@ function NewRouteModal({
             />
             <span>
               <span className="block font-semibold text-[#0b1d3a]">
-                Disponibilizar para frete
+                Disponibilizar para frete (opcional)
               </span>
               <span className="mt-0.5 block text-xs text-slate-500">
                 Enviar uma oferta ao motorista disponível mais próximo do posto.
+                Exige o valor do frete.
               </span>
             </span>
           </label>

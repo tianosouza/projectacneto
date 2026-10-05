@@ -343,34 +343,64 @@ O `versionCode` deve sempre aumentar.
 
 ## Deploy
 
-### Frontend
+O deploy e **separado**: a API (backend) e o portal (frontend) sao dois apps independentes no Fly.io, cada um com o seu `fly.toml` e `Dockerfile`.
 
-Configure `VITE_API_URL` com a URL pública da API e execute:
+| Parte     | Pasta           | Arquivos de deploy                     | O que publica                             |
+| --------- | --------------- | -------------------------------------- | ----------------------------------------- |
+| 1. API    | `backend/`      | `fly.toml`, `Dockerfile`               | Express + Prisma + banco SQLite em volume |
+| 2. Portal | raiz do projeto | `fly.toml`, `Dockerfile`, `nginx.conf` | Site React/Vite servido por nginx         |
 
-```powershell
-npm run build
-```
+Publique a **API primeiro**, depois o **portal**. Os comentarios dentro de cada arquivo indicam o que mudar.
 
-O deploy depende da infraestrutura usada pelo projeto.
-
-### API no Fly.io
-
-Consulte também `backend/README.md`.
+### Parte 1: API (`backend/`)
 
 ```powershell
+fly auth login
 cd backend
-fly apps create acneto-api
-fly volumes create ac_neto_api_data --region gru --size 1
-fly secrets set AUTH_SECRET="chave-com-32-caracteres-ou-mais" ADMIN_EMAIL="admin@exemplo.com" ADMIN_NAME="Administrador" ADMIN_PASSWORD="senha-forte" CORS_ORIGINS="https://seu-frontend.com"
-fly deploy --config fly.toml
+# 1. Edite `app` e `CORS_ORIGINS` (URL do portal) em backend/fly.toml.
+# 2. Crie o app e o volume:
+fly apps create <nome-unico-da-api>
+fly volumes create ac_neto_api_data --region gru --size 1 -a <nome-unico-da-api>
+# 3. Segredos obrigatorios (sem eles a API nao inicia). Na raiz, copie .env.fly.example para .env.fly,
+#    preencha AUTH_SECRET (32+) e ADMIN_PASSWORD (12+), sem aspas, e envie:
+$pairs = Get-Content ..\.env.fly -Encoding UTF8 | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*=.+' }
+fly secrets set $pairs -a <nome-unico-da-api>
+# 4. Publicar e testar:
+fly deploy --ha=false -a <nome-unico-da-api>
+curl https://<nome-unico-da-api>.fly.dev/api/health
 ```
 
-Depois configure:
+- `AUTH_SECRET` e `ADMIN_PASSWORD` sao obrigatorios em producao; sem eles a API nao inicia e a maquina para apos 10 reinicios (`fly machine restart <id> -a <nome>` depois de definir).
+- `SUPERADMIN_PASSWORD` (12+ caracteres) cria o super administrador; sem ele, nenhum super admin e criado em producao. `SUPERADMIN_EMAIL` e opcional.
+- "Esqueci minha senha" nao usa e-mail: o usuario confirma e-mail, documento (CPF do motorista ou CNPJ da empresa) e data de nascimento cadastrados, e entao define a nova senha. Usuarios antigos sem data de nascimento (e administradores/operadores) devem pedir a redefinicao ao administrador.
+- O banco SQLite fica no volume montado em `/data` (`DATABASE_URL=file:/data/api.db`). Mantenha UMA maquina.
+- Se o Prisma pedir confirmacao de schema em um banco antigo, revise o aviso e faca UM deploy com `fly deploy -a <nome> --env PRISMA_PUSH_FLAGS=--accept-data-loss`.
+
+### Parte 2: portal (raiz do projeto)
+
+```powershell
+cd ..
+# 1. Edite `app` e VITE_API_URL (URL da API da parte 1) em fly.toml.
+# 2. Crie o app e publique:
+fly apps create <nome-unico-do-portal>
+fly deploy -a <nome-unico-do-portal>
+```
+
+- `CORS_ORIGINS` da API deve ser exatamente `https://<nome-unico-do-portal>.fly.dev`; se estiver errado, o login mostra "Servidor indisponivel". Ao mudar, rode `fly deploy` da API de novo.
+- A URL da API e gravada no build do portal: ao mudar a URL, refaca o deploy do portal.
+- O portal nao precisa de volume nem de segredos.
+
+### App mobile
+
+Configure a URL da API em `mobile/.env` antes de gerar o APK:
 
 ```env
-VITE_API_URL="https://acneto-api.fly.dev"
-EXPO_PUBLIC_API_URL="https://acneto-api.fly.dev"
+EXPO_PUBLIC_API_URL="https://<nome-unico-da-api>.fly.dev"
 ```
+
+### Entrega ao cliente
+
+Nao entregue `.env`, `backend/.env`, `mobile/.env`, `frontend/.env.local` nem `.env.fly` (contem segredos), nem as pastas de build de `mobile/android`.
 
 ## Validação antes de publicar
 

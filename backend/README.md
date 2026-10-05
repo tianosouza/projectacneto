@@ -25,26 +25,30 @@ Vários domínios podem ser separados por vírgula.
 
 ## Deploy independente no Fly.io
 
-O arquivo [fly.toml](fly.toml) usa o app `acneto-api` como exemplo. Troque o nome se necessário e crie o app/volume antes do primeiro deploy:
+O arquivo [fly.toml](fly.toml) traz comentarios em cada ponto a mudar (`app` e `CORS_ORIGINS`). Esta e a parte 1 do deploy separado; o portal e publicado depois com o `fly.toml` da raiz do projeto. Edite o arquivo e rode:
 
 ```powershell
 cd backend
-fly apps create acneto-api
-fly volumes create ac_neto_api_data --region gru --size 1
-fly secrets set AUTH_SECRET="uma-chave-forte-com-pelo-menos-32-caracteres" ADMIN_EMAIL="admin@exemplo.com" ADMIN_NAME="Administrador" ADMIN_PASSWORD="uma-senha-forte" CORS_ORIGINS="https://seu-frontend.com"
-fly deploy --config fly.toml
+fly apps create <nome-unico-da-api>
+fly volumes create ac_neto_api_data --region gru --size 1 -a <nome-unico-da-api>
+# Na raiz, copie .env.fly.example para .env.fly (AUTH_SECRET 32+, ADMIN_PASSWORD 12+, sem aspas) e envie:
+$pairs = Get-Content ..\.env.fly -Encoding UTF8 | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*=.+' }
+fly secrets set $pairs -a <nome-unico-da-api>
+fly deploy --ha=false -a <nome-unico-da-api>
 ```
 
-Depois do deploy, a API estará em `https://acneto-api.fly.dev`. Configure o frontend com:
+`AUTH_SECRET` e `ADMIN_PASSWORD` são obrigatórios em produção. `SUPERADMIN_PASSWORD` (12+ caracteres) cria o super administrador; sem ele, nenhum é criado. Sem `CORS_ORIGINS`, requisições de outros domínios são bloqueadas em produção.
+
+Depois do deploy, a API estará em `https://<nome-unico-da-api>.fly.dev`. Configure o frontend com:
 
 ```env
-VITE_API_URL=https://acneto-api.fly.dev
+VITE_API_URL=https://<nome-unico-da-api>.fly.dev
 ```
 
 E o mobile com:
 
 ```env
-EXPO_PUBLIC_API_URL=https://acneto-api.fly.dev
+EXPO_PUBLIC_API_URL=https://<nome-unico-da-api>.fly.dev
 ```
 
 O backend não serve arquivos estáticos nem depende do build do frontend.

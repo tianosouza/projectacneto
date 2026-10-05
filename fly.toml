@@ -1,33 +1,42 @@
-# fly.toml app configuration file generated for nextdriverupdated on 2026-10-03T13:07:32-03:00
+# ============================================================================
+# DEPLOY DO PORTAL (site) NO FLY.IO  -  PARTE 2 DE 2
+# O deploy e SEPARADO: a API (backend) tem app, banco e fly.toml proprios em backend/.
+# Faca antes a parte 1 (API): backend/fly.toml. Este arquivo e para rodar na RAIZ do projeto.
 #
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+# PASSO A PASSO (nova conta):
+#   1. fly auth login
+#   2. Troque `app` abaixo por um nome UNICO para o portal (sera https://<nome>.fly.dev).
+#   3. Troque VITE_API_URL abaixo pela URL da API ja publicada (https://<nome-da-api>.fly.dev).
+#   4. fly apps create <mesmo-nome-do-portal>
+#   5. fly deploy -a <mesmo-nome-do-portal>
+#   6. Volte na API e confirme que CORS_ORIGINS (backend/fly.toml) e igual a
+#      https://<nome-do-portal>.fly.dev ; se mudar, rode `fly deploy` da API de novo.
 #
+# Nao precisa de volume nem de segredos: o portal e estatico.
+# Se mudar a URL da API, refaca o deploy do portal (a URL e gravada no build).
+# ============================================================================
 
-app = 'nextdriverupdated'
+# MUDAR: nome unico do portal na conta do cliente.
+app = 'nextdrivertest'
+
+# MUDAR (opcional): regiao (gru = Sao Paulo).
 primary_region = 'gru'
 
 [build]
   dockerfile = 'Dockerfile'
 
-[env]
-  ADMIN_EMAIL = 'admin@acnetotransportes.com'
-  ADMIN_NAME = 'Administrador'
-  CORS_ORIGINS = 'https://nextdriver.fly.dev,http://localhost:5173,http://127.0.0.1:5173'
-  VITE_API_URL = 'https://acneto-api-red-log-1872.fly.dev'
-
-[[mounts]]
-  source = 'nextdriver_data'
-  destination = '/data'
-  initial_size = '1gb'
+  [build.args]
+    # MUDAR: URL publica da API (parte 1), sem barra no final. Obrigatorio: o build falha se ficar vazio.
+    VITE_API_URL = 'https://nextdrivertesteapi.fly.dev'
 
 [http_service]
-  internal_port = 4173
+  # NAO MUDAR: deve ser igual ao `listen` do nginx.conf.
+  internal_port = 8080
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
 [[vm]]
-  memory = '512mb'
-  cpus = 2
-  memory_mb = 512
+  memory = '256mb'
+  cpus = 1

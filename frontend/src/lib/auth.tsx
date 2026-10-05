@@ -113,9 +113,12 @@ type AuthContextValue = {
       carrierId?: string;
     },
     attachments?: File[],
+    birthDate?: string,
   ) => Promise<{ error: string | null; pending?: boolean }>;
   requestPasswordReset: (
     email: string,
+    document: string,
+    birthDate: string,
   ) => Promise<{ error: string | null; resetToken?: string }>;
   resetPassword: (
     token: string,
@@ -228,6 +231,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       locationSharingAuthorized?: boolean;
     },
     attachments: File[] = [],
+    birthDate?: string,
   ) => {
     try {
       const encodedAttachments = await Promise.all(
@@ -253,6 +257,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           password,
           fullName,
           phone,
+          birthDate,
           requestedRole,
           registrationNotes,
           company,
@@ -289,20 +294,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const requestPasswordReset = async (email: string) => {
+  const requestPasswordReset = async (
+    email: string,
+    document: string,
+    birthDate: string,
+  ) => {
     try {
       const response = await apiFetch("/api/auth/password-reset/request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, document, birthDate }),
       });
       const body = (await response.json()) as {
-        message?: string;
+        error?: string;
         reset_token?: string;
       };
-      if (!response.ok)
+      if (!response.ok || !body.reset_token)
         return {
-          error: body.message ?? "Não foi possível solicitar a recuperação",
+          error: body.error ?? "Não foi possível validar os dados informados",
         };
       return { error: null, resetToken: body.reset_token };
     } catch {

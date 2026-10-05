@@ -1,25 +1,57 @@
-# fly.toml app configuration file generated for acneto-api-red-log-1872 on 2026-09-12T17:14:37-03:00
+# ============================================================================
+# DEPLOY DA API NO FLY.IO  -  PARTE 1 DE 2 (somente backend, sem o portal)
+# O deploy e SEPARADO: o portal tem app e fly.toml proprios na RAIZ do projeto (parte 2).
+# Rode tudo a partir da pasta backend/.
 #
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
+# PASSO A PASSO (nova conta):
+#   1. fly auth login
+#   2. Troque `app` abaixo por um nome UNICO no Fly (sera https://<nome>.fly.dev).
+#   3. Troque CORS_ORIGINS abaixo pela URL do portal (https://<nome-do-portal>.fly.dev).
+#   4. fly apps create <mesmo-nome-da-api>
+#   5. fly volumes create ac_neto_api_data --region gru --size 1 -a <mesmo-nome-da-api>
+#   6. Segredos obrigatorios. Na RAIZ, copie .env.fly.example para .env.fly e preencha
+#      AUTH_SECRET (32+) e ADMIN_PASSWORD (12+), sem aspas. Depois:
+#        $pairs = Get-Content ..\.env.fly -Encoding UTF8 | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*=.+' }
+#        fly secrets set $pairs -a <mesmo-nome-da-api>
+#        (sem eles a API nao inicia e a maquina para apos 10 reinicios)
+#   7. fly deploy --ha=false -a <mesmo-nome-da-api>
+#        (--ha=false = UMA maquina. Sem isso o Fly cria 2 e exige 2 volumes; o SQLite usa so 1.)
+#   8. Teste: https://<nome-da-api>.fly.dev/api/health
+#   9. Use https://<nome-da-api>.fly.dev em VITE_API_URL (fly.toml da raiz) e EXPO_PUBLIC_API_URL (mobile/.env).
+#   Se a maquina parar por falta de segredo: fly machine restart <id> -a <nome>
+#   Se o Prisma pedir confirmacao de schema (banco antigo), revise o aviso e faca UM deploy com:
+#        fly deploy -a <nome> --env PRISMA_PUSH_FLAGS=--accept-data-loss
+# ============================================================================
 
-app = 'acneto-api-red-log-1872'
+# MUDAR: nome unico da API na conta do cliente.
+app = 'nextdrivertesteapi'
+
+# MUDAR (opcional): regiao (gru = Sao Paulo). Use a mesma ao criar o volume.
 primary_region = 'gru'
 
 [build]
   dockerfile = 'Dockerfile'
 
 [env]
+  # MUDAR: e-mail e nome do administrador principal do cliente (a senha vai em ADMIN_PASSWORD, via fly secrets).
   ADMIN_EMAIL = 'admin@acnetotransportes.com'
   ADMIN_NAME = 'Administrador'
-  CORS_ORIGINS = 'https://nextdriver.fly.dev,https://acneto-transportes.fly.dev,http://localhost:5173,http://127.0.0.1:5173'
+  # MUDAR: dominio(s) do portal autorizados a chamar esta API, separados por virgula, sem barra no final.
+  # Se ficar errado, o login mostra "Servidor indisponivel" (bloqueio de CORS no navegador).
+  # O app mobile nao depende de CORS.
+  CORS_ORIGINS = 'https://nextdrivertest.fly.dev'
+  # NAO MUDAR: banco SQLite dentro do volume (/data). Sem esta variavel a API falha com erro P1012.
+  DATABASE_URL = 'file:/data/api.db'
+  # SUPERADMIN_PASSWORD (12+ caracteres) e opcional e deve ir por fly secrets, nunca neste arquivo.
 
 [[mounts]]
+  # Nome do volume, IDENTICO ao criado no passo 5. Nao renomear em app que ja esta no ar (perde o banco).
   source = 'ac_neto_api_data'
   destination = '/data'
   initial_size = '1gb'
 
 [http_service]
+  # NAO MUDAR: deve ser igual a PORT do Dockerfile (3000).
   internal_port = 3000
   force_https = true
   auto_stop_machines = 'stop'
@@ -30,3 +62,4 @@ primary_region = 'gru'
   memory = '512mb'
   cpus = 2
   memory_mb = 512
+  # ATENCAO: banco SQLite em um unico volume. Mantenha UMA maquina (nao use fly scale count > 1).

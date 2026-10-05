@@ -27,6 +27,9 @@ export function AuthScreen() {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
+  const [birthDate, setBirthDate] = useState("");
+  const [recoveryDocument, setRecoveryDocument] = useState("");
+  const [recoveryBirthDate, setRecoveryBirthDate] = useState("");
   const [driver, setDriver] = useState({
     cpf: "",
     vehicleModel: "",
@@ -140,6 +143,7 @@ export function AuthScreen() {
         requestedRole === "driver" || requestedRole === "carrier"
           ? attachments
           : [],
+        birthDate,
       );
       if (result.pending) {
         setSignupOpen(false);
@@ -152,14 +156,17 @@ export function AuthScreen() {
     }
 
     if (mode === "forgot") {
-      const result = await requestPasswordReset(email);
-      if (result.error) setError(result.error);
+      const result = await requestPasswordReset(
+        email,
+        recoveryDocument,
+        recoveryBirthDate,
+      );
+      if (result.error || !result.resetToken)
+        setError(result.error ?? "Não foi possível validar os dados.");
       else {
-        if (result.resetToken) setResetToken(result.resetToken);
+        setResetToken(result.resetToken);
         setMode("reset");
-        setError(
-          "Se o e-mail estiver cadastrado, as instruções foram preparadas.",
-        );
+        setError(null);
       }
       setSubmitting(false);
       return;
@@ -177,6 +184,9 @@ export function AuthScreen() {
         setMode("signin");
         setPassword("");
         setResetPasswordValue("");
+        setResetToken("");
+        setRecoveryDocument("");
+        setRecoveryBirthDate("");
         setError("Senha redefinida. Faça login com a nova senha.");
       }
       setSubmitting(false);
@@ -276,7 +286,9 @@ export function AuthScreen() {
             <p className="mt-1 text-sm text-slate-500">
               {mode === "signin"
                 ? "Acesse o Next Driver com seus dados."
-                : "Use um código válido e uma senha nova para proteger sua conta."}
+                : mode === "forgot"
+                  ? "Confirme seu e-mail, o número do documento (CPF do motorista ou CNPJ da empresa) e a data de nascimento cadastrados."
+                  : "Dados confirmados. Defina uma nova senha para sua conta."}
             </p>
 
             <form onSubmit={handleSubmit} className="mt-6 space-y-4">
@@ -290,7 +302,25 @@ export function AuthScreen() {
                   required
                 />
               )}
-              {mode !== "forgot" && (
+              {mode === "forgot" && (
+                <>
+                  <InputField
+                    icon={IdCard}
+                    type="text"
+                    placeholder="CPF (motorista) ou CNPJ (empresa)"
+                    value={recoveryDocument}
+                    onChange={setRecoveryDocument}
+                    required
+                  />
+                  <DateField
+                    label="Data de nascimento"
+                    value={recoveryBirthDate}
+                    onChange={setRecoveryBirthDate}
+                    required
+                  />
+                </>
+              )}
+              {mode === "signin" && (
                 <div className="relative">
                   <InputField
                     icon={Lock}
@@ -313,24 +343,14 @@ export function AuthScreen() {
                 </div>
               )}
               {mode === "reset" && (
-                <>
-                  <InputField
-                    icon={Lock}
-                    type="text"
-                    placeholder="Código de recuperação"
-                    value={resetToken}
-                    onChange={setResetToken}
-                    required
-                  />
-                  <InputField
-                    icon={Lock}
-                    type="password"
-                    placeholder="Nova senha"
-                    value={resetPasswordValue}
-                    onChange={setResetPasswordValue}
-                    required
-                  />
-                </>
+                <InputField
+                  icon={Lock}
+                  type="password"
+                  placeholder="Nova senha"
+                  value={resetPasswordValue}
+                  onChange={setResetPasswordValue}
+                  required
+                />
               )}
 
               {error && (
@@ -349,7 +369,7 @@ export function AuthScreen() {
                   : mode === "signin"
                     ? "Entrar no portal"
                     : mode === "forgot"
-                      ? "Solicitar recuperação"
+                      ? "Validar dados"
                       : "Redefinir senha"}
                 {!submitting && <ArrowRight size={16} />}
               </button>
@@ -469,6 +489,12 @@ export function AuthScreen() {
                   placeholder="E-mail *"
                   value={email}
                   onChange={setEmail}
+                  required
+                />
+                <DateField
+                  label="Data de nascimento *"
+                  value={birthDate}
+                  onChange={setBirthDate}
                   required
                 />
                 <InputField
@@ -863,6 +889,35 @@ export function InitialPasswordScreen() {
         </div>
       </form>
     </div>
+  );
+}
+
+function DateField({
+  label,
+  value,
+  onChange,
+  required,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+}) {
+  return (
+    <label className="flex flex-col gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
+      <span>{label}</span>
+      <span className="flex items-center gap-2 text-sm font-normal text-slate-500">
+        <CalendarDays size={18} className="shrink-0 text-slate-400" />
+        <input
+          type="date"
+          value={value}
+          max={new Date().toISOString().slice(0, 10)}
+          onChange={(event) => onChange(event.target.value)}
+          required={required}
+          className="min-w-0 flex-1 bg-transparent outline-none"
+        />
+      </span>
+    </label>
   );
 }
 

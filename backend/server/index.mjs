@@ -17,6 +17,8 @@ const corsOrigins = new Set(
     .filter(Boolean),
 );
 
+const isProduction = process.env.NODE_ENV === "production";
+
 if (!tokenSecret || tokenSecret.length < 32) {
   throw new Error("AUTH_SECRET must contain at least 32 characters");
 }
@@ -26,7 +28,9 @@ app.use((request, response, next) => {
   const origin = request.get("origin");
   if (
     origin &&
-    (corsOrigins.size === 0 || corsOrigins.has("*") || corsOrigins.has(origin))
+    ((corsOrigins.size === 0 && !isProduction) ||
+      corsOrigins.has("*") ||
+      corsOrigins.has(origin))
   ) {
     response.setHeader("Access-Control-Allow-Origin", origin);
     response.setHeader("Vary", "Origin");
@@ -65,13 +69,12 @@ const ensureSystemAdmin = async () => {
     .trim()
     .toLowerCase();
   const fullName = (process.env.ADMIN_NAME || "Administrador").trim();
-  const password = process.env.ADMIN_PASSWORD || "admin123456789";
+  const configuredPassword = process.env.ADMIN_PASSWORD;
 
-  if (!password || password.length < 12) {
-    console.warn(
-      "ADMIN_PASSWORD is missing or too short. Using it only for local bootstrap.",
-    );
+  if (isProduction && (!configuredPassword || configuredPassword.length < 12)) {
+    throw new Error("ADMIN_PASSWORD must contain at least 12 characters");
   }
+  const password = configuredPassword || "admin123456789";
 
   const passwordHash = await hashPassword(password);
   const user = await prisma.user.upsert({
@@ -88,8 +91,18 @@ const ensureSystemAdmin = async () => {
 
   console.log(`System admin ready: ${email}`);
 
-  const superAdminEmail = "admin@admin.com";
-  const superAdminPasswordHash = await hashPassword("admin12345");
+  const superAdminEmail = (process.env.SUPERADMIN_EMAIL || "admin@admin.com")
+    .trim()
+    .toLowerCase();
+  const superAdminPassword =
+    process.env.SUPERADMIN_PASSWORD || (isProduction ? "" : "admin12345");
+  if (isProduction && superAdminPassword.length < 12) {
+    console.warn(
+      "SUPERADMIN_PASSWORD not set (min. 12 chars): super admin was not created or updated.",
+    );
+    return;
+  }
+  const superAdminPasswordHash = await hashPassword(superAdminPassword);
   const superAdmin = await prisma.user.upsert({
     where: { email: superAdminEmail },
     update: {
@@ -133,6 +146,81 @@ const verifyPassword = async (password, stored) => {
 
 const hashResetToken = (token) =>
   crypto.createHash("sha256").update(token).digest("hex");
+
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+// Remove pontuação e caixa para que "123.456.789-09" e "12345678909" contem como o mesmo documento.
+const normalizeDocument = (value) =>
+  String(value ?? "")
+    .replace(/[^0-9A-Za-z]/g, "")
+    .toUpperCase() || null;
+
+const uniqueConflictMessage = (error) => {
+  const target = JSON.stringify(error?.meta ?? {}).toLowerCase();
+  if (target.includes("cpf")) return "Este CPF já está cadastrado";
+  if (target.includes("cnpj")) return "Este CNPJ já está cadastrado";
+  if (target.includes("cnh")) return "Esta CNH já está cadastrada";
+  if (target.includes("plate")) return "Esta placa já está cadastrada";
+  if (target.includes("email")) return "Este e-mail já está cadastrado";
+  return "Já existe um cadastro com estes dados";
+};
+
+// Padroniza CPF/CNH/CNPJ de registros antigos (com pontuação). Em conflito, mantém o valor original e avisa.
+const normalizeStoredDocuments = async () => {
+  const fix = async (delegate, id, field, value) => {
+    const normalized = normalizeDocument(value);
+    if (!value || normalized === value) return;
+    try {
+      await delegate.update({ where: { id }, data: { [field]: normalized } });
+    } catch (error) {
+      if (error?.code === "P2002")
+        console.warn(`Documento duplicado ignorado (${field}, id ${id}).`);
+      else throw error;
+    }
+  };
+  for (const driver of await prisma.driver.findMany({
+    select: { id: true, cpf: true, cnh: true },
+  })) {
+    await fix(prisma.driver, driver.id, "cpf", driver.cpf);
+    await fix(prisma.driver, driver.id, "cnh", driver.cnh);
+  }
+  for (const company of await prisma.transportCompany.findMany({
+    select: { id: true, cnpj: true },
+  }))
+    await fix(prisma.transportCompany, company.id, "cnpj", company.cnpj);
+};
+
+// Data de nascimento no formato AAAA-MM-DD (valor do <input type="date">). Retorna null se inválida.
+const normalizeBirthDate = (value) => {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const date = new Date(`${text}T00:00:00Z`);
+  if (
+    !Number.isFinite(date.getTime()) ||
+    date.toISOString().slice(0, 10) !== text
+  )
+    return null;
+  if (date > new Date() || date.getUTCFullYear() < 1900) return null;
+  return text;
+};
+
+const sameSecret = (first, second) =>
+  crypto.timingSafeEqual(
+    crypto.createHash("sha256").update(String(first)).digest(),
+    crypto.createHash("sha256").update(String(second)).digest(),
+  );
+
+// Limite de tentativas da recuperação de senha (por e-mail e por IP), janela de 15 minutos.
+const resetRequestAttempts = new Map();
+const resetRequestLimited = (key, max) => {
+  const now = Date.now();
+  const recent = (resetRequestAttempts.get(key) || []).filter(
+    (time) => now - time < 15 * 60 * 1000,
+  );
+  recent.push(now);
+  resetRequestAttempts.set(key, recent);
+  return recent.length > max;
+};
 
 const encodeToken = (payload) => {
   const body = Buffer.from(
@@ -453,8 +541,7 @@ app.post("/api/auth/signup", async (request, response) => {
     typeof companyData.legalName === "string"
       ? companyData.legalName.trim()
       : "";
-  const cnpj =
-    typeof companyData.cnpj === "string" ? companyData.cnpj.trim() : "";
+  const cnpj = normalizeDocument(companyData.cnpj) ?? "";
   const stateRegistration =
     typeof companyData.stateRegistration === "string"
       ? companyData.stateRegistration.trim() || null
@@ -550,6 +637,15 @@ app.post("/api/auth/signup", async (request, response) => {
           ? "Nome do sócio representante, e-mail, telefone e senha válida são obrigatórios"
           : "Nome, e-mail, telefone e senha válida são obrigatórios",
     });
+  if (!emailPattern.test(email))
+    return response.status(400).json({
+      error: "Informe um e-mail válido e existente para o cadastro",
+    });
+  const birthDate = normalizeBirthDate(request.body?.birthDate);
+  if (!birthDate)
+    return response
+      .status(400)
+      .json({ error: "Informe uma data de nascimento válida" });
   if (
     ["carrier", "client"].includes(requestedRole) &&
     (!legalName || !cnpj || !address)
@@ -602,6 +698,7 @@ app.post("/api/auth/signup", async (request, response) => {
           email,
           fullName,
           phone,
+          birthDate,
           passwordHash,
           profile: {
             create: {
@@ -619,7 +716,7 @@ app.post("/api/auth/signup", async (request, response) => {
                     fullName,
                     email,
                     phone,
-                    cpf: driverData.cpf?.trim() || null,
+                    cpf: normalizeDocument(driverData.cpf),
                     vehicleModel: driverData.vehicleModel?.trim() || null,
                     vehicleYear: Number.isInteger(driverData.vehicleYear)
                       ? driverData.vehicleYear
@@ -627,7 +724,7 @@ app.post("/api/auth/signup", async (request, response) => {
                     capacity: driverData.capacity?.trim() || null,
                     compartments: driverData.compartments?.trim() || null,
                     plate: driverData.plate?.trim() || null,
-                    cnh: driverData.cnh?.trim() || null,
+                    cnh: normalizeDocument(driverData.cnh),
                     cnhCategory: driverData.cnhCategory?.trim() || null,
                     cnhExpiresAt: driverData.cnhExpiresAt
                       ? new Date(driverData.cnhExpiresAt)
@@ -686,9 +783,7 @@ app.post("/api/auth/signup", async (request, response) => {
     });
   } catch (error) {
     if (error?.code === "P2002")
-      return response
-        .status(409)
-        .json({ error: "Este e-mail já está cadastrado" });
+      return response.status(409).json({ error: uniqueConflictMessage(error) });
     response.status(500).json({ error: "Não foi possível criar a conta" });
   }
 });
@@ -728,14 +823,43 @@ app.post("/api/auth/password-reset/request", async (request, response) => {
     typeof request.body?.email === "string"
       ? request.body.email.trim().toLowerCase()
       : "";
-  const genericResponse = {
-    message:
-      "Se o e-mail estiver cadastrado, enviaremos as instruções de recuperação.",
-  };
-  if (!email) return response.json(genericResponse);
+  const document = normalizeDocument(request.body?.document);
+  const birthDate = normalizeBirthDate(request.body?.birthDate);
+  if (!emailPattern.test(email) || !document || !birthDate)
+    return response.status(400).json({
+      error:
+        "Informe e-mail, número do documento (CPF ou CNPJ) e data de nascimento válidos",
+    });
+  const clientIp = request.get("fly-client-ip") || request.ip;
+  if (
+    resetRequestLimited(`email:${email}`, 5) ||
+    resetRequestLimited(`ip:${clientIp}`, 20)
+  )
+    return response.status(429).json({
+      error: "Muitas tentativas. Aguarde alguns minutos e tente novamente.",
+    });
 
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) return response.json(genericResponse);
+  const user = await prisma.user.findUnique({
+    where: { email },
+    include: {
+      driver: { select: { cpf: true } },
+      transportCompany: { select: { cnpj: true } },
+    },
+  });
+  // Motorista confirma com o CPF; transportadora/cliente com o CNPJ. Resposta única para qualquer falha.
+  const storedDocument = normalizeDocument(
+    user?.driver?.cpf ?? user?.transportCompany?.cnpj,
+  );
+  const confirmed =
+    Boolean(user?.birthDate) &&
+    Boolean(storedDocument) &&
+    sameSecret(storedDocument, document) &&
+    sameSecret(user.birthDate, birthDate);
+  if (!confirmed)
+    return response.status(403).json({
+      error:
+        "Os dados informados não conferem. Se o problema continuar, peça ao administrador para redefinir sua senha.",
+    });
 
   const rawToken = crypto.randomBytes(32).toString("base64url");
   await prisma.passwordResetToken.deleteMany({
@@ -748,11 +872,7 @@ app.post("/api/auth/password-reset/request", async (request, response) => {
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     },
   });
-  console.log(`Password reset requested for ${email}. Token: ${rawToken}`);
-  response.json({
-    ...genericResponse,
-    ...(process.env.NODE_ENV !== "production" ? { reset_token: rawToken } : {}),
-  });
+  response.json({ reset_token: rawToken });
 });
 
 app.post("/api/auth/password-reset/confirm", async (request, response) => {
@@ -1479,9 +1599,7 @@ app.post("/api/admin/users", auth, requireAdmin, async (request, response) => {
       .json({ user: publicUser(user), profile: user.profile });
   } catch (error) {
     if (error?.code === "P2002")
-      return response
-        .status(409)
-        .json({ error: "Este e-mail já está cadastrado" });
+      return response.status(409).json({ error: uniqueConflictMessage(error) });
     response.status(400).json({ error: "Não foi possível criar o acesso" });
   }
 });
@@ -1932,130 +2050,139 @@ app.patch(
     const initialPasswordHash = ["operator", "admin"].includes(assignedRole)
       ? await hashPassword(initialPassword)
       : null;
-    const profile = await prisma.$transaction(async (transaction) => {
-      const updatedProfile = await transaction.profile.update({
-        where: { userId: request.params.userId },
-        data: {
-          approved: true,
-          role: assignedRole,
-          mustChangePassword: ["operator", "admin"].includes(assignedRole),
-        },
-      });
-      if (
-        ["carrier", "client"].includes(assignedRole) &&
-        user.transportCompany
-      ) {
-        await transaction.transportCompany.update({
-          where: { id: user.transportCompany.id },
-          data: { status: "active" },
-        });
-      }
-      if (initialPasswordHash)
-        await transaction.user.update({
-          where: { id: user.id },
-          data: { passwordHash: initialPasswordHash },
-        });
-      if (assignedRole === "driver" && !user.driver) {
-        const approvedDriver = await transaction.driver.create({
+    let profile;
+    try {
+      profile = await prisma.$transaction(async (transaction) => {
+        const updatedProfile = await transaction.profile.update({
+          where: { userId: request.params.userId },
           data: {
-            userId: user.id,
-            fullName: driverData.fullName.trim(),
-            email: user.email,
-            phone: driverData.phone.trim(),
-            vehicleModel: driverData.vehicleModel?.trim() || null,
-            vehicleYear: driverData.vehicleYear
-              ? Number(driverData.vehicleYear)
-              : null,
-            plate: driverData.plate?.trim() || null,
-            city: driverData.city?.trim() || null,
-            state: driverData.state?.trim() || null,
-            capacity: driverData.capacity?.trim() || null,
-            compartments: driverData.compartments?.trim() || null,
-            cpf: driverData.cpf?.trim() || null,
-            cnh: driverData.cnh?.trim() || null,
-            cnhCategory: driverData.cnhCategory?.trim() || null,
-            cnhExpiresAt: driverData.cnhExpiresAt
-              ? new Date(driverData.cnhExpiresAt)
-              : null,
-            locationSharingAuthorized:
-              driverData.locationSharingAuthorized === true,
-            employmentType: user.profile.companyId ? "carrier" : "autonomous",
-            homologationStatus: "active",
+            approved: true,
+            role: assignedRole,
+            mustChangePassword: ["operator", "admin"].includes(assignedRole),
           },
         });
-        if (user.profile.companyId)
-          await transaction.driverCarrierLink.create({
+        if (
+          ["carrier", "client"].includes(assignedRole) &&
+          user.transportCompany
+        ) {
+          await transaction.transportCompany.update({
+            where: { id: user.transportCompany.id },
+            data: { status: "active" },
+          });
+        }
+        if (initialPasswordHash)
+          await transaction.user.update({
+            where: { id: user.id },
+            data: { passwordHash: initialPasswordHash },
+          });
+        if (assignedRole === "driver" && !user.driver) {
+          const approvedDriver = await transaction.driver.create({
             data: {
-              driverId: approvedDriver.id,
-              companyId: user.profile.companyId,
+              userId: user.id,
+              fullName: driverData.fullName.trim(),
+              email: user.email,
+              phone: driverData.phone.trim(),
+              vehicleModel: driverData.vehicleModel?.trim() || null,
+              vehicleYear: driverData.vehicleYear
+                ? Number(driverData.vehicleYear)
+                : null,
+              plate: driverData.plate?.trim() || null,
+              city: driverData.city?.trim() || null,
+              state: driverData.state?.trim() || null,
+              capacity: driverData.capacity?.trim() || null,
+              compartments: driverData.compartments?.trim() || null,
+              cpf: normalizeDocument(driverData.cpf),
+              cnh: normalizeDocument(driverData.cnh),
+              cnhCategory: driverData.cnhCategory?.trim() || null,
+              cnhExpiresAt: driverData.cnhExpiresAt
+                ? new Date(driverData.cnhExpiresAt)
+                : null,
+              locationSharingAuthorized:
+                driverData.locationSharingAuthorized === true,
+              employmentType: user.profile.companyId ? "carrier" : "autonomous",
+              homologationStatus: "active",
             },
           });
-      } else if (assignedRole === "driver" && user.driver) {
-        await transaction.driver.update({
-          where: { id: user.driver.id },
-          data: {
-            fullName: driverData.fullName.trim(),
-            email: user.email,
-            phone: driverData.phone.trim(),
-            vehicleModel:
-              driverData.vehicleModel === undefined
-                ? user.driver.vehicleModel
-                : driverData.vehicleModel.trim() || null,
-            vehicleYear:
-              driverData.vehicleYear === undefined
-                ? user.driver.vehicleYear
-                : Number(driverData.vehicleYear),
-            plate:
-              driverData.plate === undefined
-                ? user.driver.plate
-                : driverData.plate.trim() || null,
-            city:
-              driverData.city === undefined
-                ? user.driver.city
-                : driverData.city.trim() || null,
-            state:
-              driverData.state === undefined
-                ? user.driver.state
-                : driverData.state.trim() || null,
-            capacity:
-              driverData.capacity === undefined
-                ? user.driver.capacity
-                : driverData.capacity.trim() || null,
-            compartments:
-              driverData.compartments === undefined
-                ? user.driver.compartments
-                : driverData.compartments.trim() || null,
-            cpf:
-              driverData.cpf === undefined
-                ? user.driver.cpf
-                : driverData.cpf.trim() || null,
-            cnh:
-              driverData.cnh === undefined
-                ? user.driver.cnh
-                : driverData.cnh.trim() || null,
-            cnhCategory:
-              driverData.cnhCategory === undefined
-                ? user.driver.cnhCategory
-                : driverData.cnhCategory.trim() || null,
-            cnhExpiresAt:
-              driverData.cnhExpiresAt === undefined
-                ? user.driver.cnhExpiresAt
-                : driverData.cnhExpiresAt
-                  ? new Date(driverData.cnhExpiresAt)
-                  : null,
-            locationSharingAuthorized:
-              driverData.locationSharingAuthorized === undefined
-                ? user.driver.locationSharingAuthorized
-                : driverData.locationSharingAuthorized === true,
-            employmentType: user.profile.companyId
-              ? "carrier"
-              : user.driver.employmentType,
-            homologationStatus: "active",
-          },
-        });
-      }
-      return updatedProfile;
-    });
+          if (user.profile.companyId)
+            await transaction.driverCarrierLink.create({
+              data: {
+                driverId: approvedDriver.id,
+                companyId: user.profile.companyId,
+              },
+            });
+        } else if (assignedRole === "driver" && user.driver) {
+          await transaction.driver.update({
+            where: { id: user.driver.id },
+            data: {
+              fullName: driverData.fullName.trim(),
+              email: user.email,
+              phone: driverData.phone.trim(),
+              vehicleModel:
+                driverData.vehicleModel === undefined
+                  ? user.driver.vehicleModel
+                  : driverData.vehicleModel.trim() || null,
+              vehicleYear:
+                driverData.vehicleYear === undefined
+                  ? user.driver.vehicleYear
+                  : Number(driverData.vehicleYear),
+              plate:
+                driverData.plate === undefined
+                  ? user.driver.plate
+                  : driverData.plate.trim() || null,
+              city:
+                driverData.city === undefined
+                  ? user.driver.city
+                  : driverData.city.trim() || null,
+              state:
+                driverData.state === undefined
+                  ? user.driver.state
+                  : driverData.state.trim() || null,
+              capacity:
+                driverData.capacity === undefined
+                  ? user.driver.capacity
+                  : driverData.capacity.trim() || null,
+              compartments:
+                driverData.compartments === undefined
+                  ? user.driver.compartments
+                  : driverData.compartments.trim() || null,
+              cpf:
+                driverData.cpf === undefined
+                  ? user.driver.cpf
+                  : normalizeDocument(driverData.cpf),
+              cnh:
+                driverData.cnh === undefined
+                  ? user.driver.cnh
+                  : normalizeDocument(driverData.cnh),
+              cnhCategory:
+                driverData.cnhCategory === undefined
+                  ? user.driver.cnhCategory
+                  : driverData.cnhCategory.trim() || null,
+              cnhExpiresAt:
+                driverData.cnhExpiresAt === undefined
+                  ? user.driver.cnhExpiresAt
+                  : driverData.cnhExpiresAt
+                    ? new Date(driverData.cnhExpiresAt)
+                    : null,
+              locationSharingAuthorized:
+                driverData.locationSharingAuthorized === undefined
+                  ? user.driver.locationSharingAuthorized
+                  : driverData.locationSharingAuthorized === true,
+              employmentType: user.profile.companyId
+                ? "carrier"
+                : user.driver.employmentType,
+              homologationStatus: "active",
+            },
+          });
+        }
+        return updatedProfile;
+      });
+    } catch (error) {
+      if (error?.code === "P2002")
+        return response
+          .status(409)
+          .json({ error: uniqueConflictMessage(error) });
+      throw error;
+    }
     broadcast("registration-approved");
     response.json({ profile });
   },
@@ -2097,7 +2224,15 @@ app.patch("/api/drivers/me", auth, async (request, response) => {
     Object.entries(body).filter(([key]) => allowed.includes(key)),
   );
   if (data.cnhExpiresAt) data.cnhExpiresAt = new Date(data.cnhExpiresAt);
-  await prisma.driver.update({ where: { id: request.user.driver.id }, data });
+  if ("cpf" in data) data.cpf = normalizeDocument(data.cpf);
+  if ("cnh" in data) data.cnh = normalizeDocument(data.cnh);
+  try {
+    await prisma.driver.update({ where: { id: request.user.driver.id }, data });
+  } catch (error) {
+    if (error?.code === "P2002")
+      return response.status(409).json({ error: uniqueConflictMessage(error) });
+    throw error;
+  }
   const driver = await prisma.driver.findUnique({
     where: { id: request.user.driver.id },
     include: {
@@ -3158,10 +3293,8 @@ app.post(
       typeof request.body?.phone === "string" ? request.body.phone.trim() : "";
     const password =
       typeof request.body?.password === "string" ? request.body.password : "";
-    const cpf =
-      typeof request.body?.cpf === "string" ? request.body.cpf.trim() : "";
-    const cnh =
-      typeof request.body?.cnh === "string" ? request.body.cnh.trim() : "";
+    const cpf = normalizeDocument(request.body?.cpf) ?? "";
+    const cnh = normalizeDocument(request.body?.cnh) ?? "";
     const cnhCategory =
       typeof request.body?.cnhCategory === "string"
         ? request.body.cnhCategory.trim()
@@ -3196,10 +3329,12 @@ app.post(
         : "";
     const locationSharingAuthorized =
       request.body?.locationSharingAuthorized === true;
+    const birthDate = normalizeBirthDate(request.body?.birthDate);
     if (
       !fullName ||
       !email ||
       !phone ||
+      !birthDate ||
       password.length < 6 ||
       [
         cpf,
@@ -3226,6 +3361,7 @@ app.post(
             fullName,
             email,
             phone,
+            birthDate,
             passwordHash,
             profile: {
               create: {
@@ -3280,7 +3416,7 @@ app.post(
       if (error?.code === "P2002")
         return response
           .status(409)
-          .json({ error: "Este e-mail já está cadastrado" });
+          .json({ error: uniqueConflictMessage(error) });
       response
         .status(400)
         .json({ error: "Não foi possível solicitar o cadastro do motorista" });
@@ -3912,18 +4048,13 @@ app.post(
       typeof body.collectionPointId === "string" ? body.collectionPointId : "";
     const finalCustomerId =
       typeof body.finalCustomerId === "string" ? body.finalCustomerId : "";
-    const notifyNearestDriver = body.notifyNearestDriver === true;
     const offerAmountCents = body.amountCents;
-
-    if (
-      notifyNearestDriver &&
-      (!Number.isSafeInteger(offerAmountCents) ||
-        offerAmountCents <= 0 ||
-        offerAmountCents > 2_147_483_647)
-    )
-      return response.status(400).json({
-        error: "Informe um valor válido para disponibilizar a rota como frete",
-      });
+    // A oferta ao motorista mais próximo é opcional: sem valor válido a rota é criada normalmente.
+    const notifyNearestDriver =
+      body.notifyNearestDriver === true &&
+      Number.isSafeInteger(offerAmountCents) &&
+      offerAmountCents > 0 &&
+      offerAmountCents <= 2_147_483_647;
 
     if (!collectionPointId || !finalCustomerId) {
       return response.status(400).json({
@@ -3960,46 +4091,26 @@ app.post(
         .status(400)
         .json({ error: "Cliente final inválido ou inativo" });
     }
-    if (
-      ![collectionPoint, finalCustomer].every(
-        (point) =>
-          Number.isFinite(point.latitude) && Number.isFinite(point.longitude),
-      )
-    ) {
-      return response.status(400).json({
-        error:
-          "O posto de coleta e o cliente final precisam ter endereço com coordenadas GPS para calcular a distância",
-      });
-    }
-    if (
-      collectionPoint.latitude === finalCustomer.latitude &&
-      collectionPoint.longitude === finalCustomer.longitude
-    )
-      return response.status(422).json({
-        error:
-          "Posto de coleta e cliente final foram localizados no mesmo ponto. Edite os endereços e confirme número, cidade e UF.",
-      });
-
-    // Distância sempre calculada a partir dos endereços (coordenadas) dos dois pontos, nunca digitada manualmente.
-    const coordinates = `${collectionPoint.longitude},${collectionPoint.latitude};${finalCustomer.longitude},${finalCustomer.latitude}`;
-    const { body: routeBody, error: osrmError } = await fetchOsrmRoute(
-      coordinates,
-      "overview=false&steps=false",
+    // Distância calculada pelos endereços, nunca digitada. Se não der para calcular, a rota é criada sem distância.
+    const hasCoordinates = [collectionPoint, finalCustomer].every(
+      (point) =>
+        Number.isFinite(point.latitude) && Number.isFinite(point.longitude),
     );
-    if (osrmError) return response.status(502).json({ error: osrmError });
-    const calculatedRoute = routeBody.routes?.[0];
-    if (
-      routeBody.code !== "Ok" ||
-      !calculatedRoute ||
-      !Number.isFinite(calculatedRoute.distance) ||
-      calculatedRoute.distance <= 0
-    ) {
-      return response.status(422).json({
-        error:
-          "Não foi possível calcular a distância entre os endereços informados",
-      });
+    let distanceKm = null;
+    if (hasCoordinates) {
+      const coordinates = `${collectionPoint.longitude},${collectionPoint.latitude};${finalCustomer.longitude},${finalCustomer.latitude}`;
+      const { body: routeBody } = await fetchOsrmRoute(
+        coordinates,
+        "overview=false&steps=false",
+      );
+      const calculatedDistance = routeBody?.routes?.[0]?.distance;
+      if (
+        routeBody?.code === "Ok" &&
+        Number.isFinite(calculatedDistance) &&
+        calculatedDistance > 0
+      )
+        distanceKm = calculatedDistance / 1000;
     }
-    const distanceKm = calculatedRoute.distance / 1000;
 
     const route = await prisma.freightRoute.create({
       data: {
@@ -4012,14 +4123,20 @@ app.post(
     });
     let notificationMessage = null;
     let nearestDriver = null;
-    if (notifyNearestDriver) {
-      const result = await notifyNearestDriverForRoute({
-        route,
-        userId: request.user.id,
-        amountCents: offerAmountCents,
-      });
-      nearestDriver = result.nearestDriver;
-      notificationMessage = result.notificationMessage;
+    if (notifyNearestDriver && hasCoordinates) {
+      try {
+        const result = await notifyNearestDriverForRoute({
+          route,
+          userId: request.user.id,
+          amountCents: offerAmountCents,
+        });
+        nearestDriver = result.nearestDriver;
+        notificationMessage = result.notificationMessage;
+      } catch (error) {
+        console.error("Falha ao enviar oferta da rota", error);
+        notificationMessage =
+          "Rota criada, mas não foi possível enviar a oferta ao motorista.";
+      }
     }
     broadcast("freight-route-created");
     const updatedRoute = nearestDriver
@@ -5087,6 +5204,7 @@ app.use((error, request, response, next) => {
 });
 
 await ensureSystemAdmin();
+await normalizeStoredDocuments();
 
 const server = app.listen(port, "0.0.0.0", () =>
   console.log(`API listening on ${port}`),

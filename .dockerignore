@@ -10,7 +10,9 @@
 **/node_modules
 mobile
 mobile/**
-backend/node_modules
+# A API tem imagem propria (backend/Dockerfile); fora da imagem do portal.
+backend
+backend/**
 **/dist
 **/dist-ssr
 **/*.local
@@ -25,5 +27,9 @@ backend/node_modules
 **/*.sln
 **/*.sw?
 **/.env
-!frontend/.env
+**/.env.*
+# Nunca enviar bancos SQLite locais nem segredos para a imagem do cliente.
+**/*.db
+**/*.db-journal
 fly.toml
+fly.*.toml

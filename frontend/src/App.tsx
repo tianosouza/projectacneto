@@ -209,6 +209,7 @@ function CarrierDashboard({
     email: "",
     phone: "",
     password: "",
+    birthDate: "",
     cpf: "",
     cnh: "",
     cnhCategory: "",
@@ -295,6 +296,7 @@ function CarrierDashboard({
       email: "",
       phone: "",
       password: "",
+      birthDate: "",
       cpf: "",
       cnh: "",
       cnhCategory: "",
@@ -464,6 +466,25 @@ function CarrierDashboard({
                     type="password"
                     className={registrationInputClass}
                   />
+                  <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-500">
+                    <CalendarDays
+                      size={18}
+                      className="shrink-0 text-slate-400"
+                    />
+                    <input
+                      type="date"
+                      value={driverForm.birthDate}
+                      max={new Date().toISOString().slice(0, 10)}
+                      onChange={(e) =>
+                        setDriverForm((form) => ({
+                          ...form,
+                          birthDate: e.target.value,
+                        }))
+                      }
+                      className="min-w-0 flex-1 bg-transparent outline-none"
+                      aria-label="Data de nascimento *"
+                    />
+                  </label>
                   <input
                     value={driverForm.cpf}
                     onChange={(e) =>
