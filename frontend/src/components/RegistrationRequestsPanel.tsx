@@ -144,6 +144,9 @@ export function RegistrationRequestsPanel({
                     <p className="text-xs text-slate-500">
                       {request.email} ·{" "}
                       {request.phone || "Telefone não informado"}
+                      {request.birth_date
+                        ? ` · Nasc.: ${request.birth_date.split("-").reverse().join("/")}`
+                        : ""}
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
                       Solicitação para{" "}

@@ -13,7 +13,11 @@ type AccountUser = {
   email: string;
   full_name?: string | null;
   phone?: string | null;
+  birth_date?: string | null;
 };
+
+const formatBirthDate = (value?: string | null) =>
+  value ? value.split("-").reverse().join("/") : "Não informada";
 
 type AccountProfile = {
   role: string;
@@ -30,9 +34,32 @@ export function AccountCenter({
   driver?: Driver | null;
 }) {
   const [requestText, setRequestText] = useState("");
+  const [birthDate, setBirthDate] = useState(user.birth_date ?? "");
+  const [birthSaved, setBirthSaved] = useState(Boolean(user.birth_date));
+  const [birthError, setBirthError] = useState("");
   const [requestState, setRequestState] = useState<
     "idle" | "sending" | "sent" | "error"
   >("idle");
+
+  const saveBirthDate = async () => {
+    setBirthError("");
+    try {
+      const response = await apiFetch("/api/account/birth-date", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("acneto-access-token") ?? ""}`,
+        },
+        body: JSON.stringify({ birthDate }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok)
+        throw new Error(body.error ?? "Não foi possível salvar a data");
+      setBirthSaved(true);
+    } catch (cause) {
+      setBirthError((cause as Error).message);
+    }
+  };
 
   const sendChangeRequest = async () => {
     if (!requestText.trim() || requestState === "sending") return;
@@ -58,6 +85,7 @@ export function AccountCenter({
     ["Nome completo", driver?.full_name ?? user.full_name ?? "Não informado"],
     ["E-mail", user.email],
     ["Telefone", driver?.phone ?? user.phone ?? "Não informado"],
+    ["Data de nascimento", formatBirthDate(birthSaved ? birthDate : null)],
     ["Perfil de acesso", profile?.role ?? "Não informado"],
     ...(driver
       ? [
@@ -102,6 +130,39 @@ export function AccountCenter({
           <LockKeyhole size={14} /> Os dados são somente para consulta nesta
           tela.
         </div>
+        {!birthSaved && (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm font-semibold text-amber-900">
+              Informe sua data de nascimento
+            </p>
+            <p className="mt-1 text-xs text-amber-800">
+              Ela é usada para recuperar sua senha. Depois de salva, só pode ser
+              alterada por chamado.
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                type="date"
+                value={birthDate}
+                max={new Date().toISOString().slice(0, 10)}
+                onChange={(event) => setBirthDate(event.target.value)}
+                className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => void saveBirthDate()}
+                disabled={!birthDate}
+                className="rounded-lg bg-[#1052c7] px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                Salvar data
+              </button>
+            </div>
+            {birthError && (
+              <p className="mt-2 text-xs font-semibold text-rose-600">
+                {birthError}
+              </p>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

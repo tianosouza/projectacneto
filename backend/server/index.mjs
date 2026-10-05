@@ -311,6 +311,7 @@ const publicUser = (user) => ({
   email: user.email,
   full_name: user.fullName,
   phone: user.phone,
+  birth_date: user.birthDate ?? null,
   role: user.profile?.role || "driver",
 });
 
@@ -818,6 +819,24 @@ app.post("/api/account/change-requests", auth, async (request, response) => {
   });
 });
 
+app.patch("/api/account/birth-date", auth, async (request, response) => {
+  const birthDate = normalizeBirthDate(request.body?.birthDate);
+  if (!birthDate)
+    return response
+      .status(400)
+      .json({ error: "Informe uma data de nascimento válida" });
+  if (request.user.birthDate)
+    return response.status(409).json({
+      error:
+        "A data de nascimento já foi informada. Para alterar, abra um chamado.",
+    });
+  await prisma.user.update({
+    where: { id: request.user.id },
+    data: { birthDate },
+  });
+  response.json({ birth_date: birthDate });
+});
+
 app.post("/api/auth/password-reset/request", async (request, response) => {
   const email =
     typeof request.body?.email === "string"
@@ -926,6 +945,346 @@ const requireSuperAdmin = (request, response, next) => {
     .status(403)
     .json({ error: "Acesso restrito ao superadministrador" });
 };
+
+// ---------------------------------------------------------------------------
+// Chamados de suporte: qualquer usuario logado abre; admin/operador atendem.
+// ---------------------------------------------------------------------------
+const supportTicketStatuses = ["open", "in_progress", "resolved", "closed"];
+const supportAttachmentTypes = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
+const parseSupportAttachments = (list) => {
+  if (!Array.isArray(list)) return { files: [] };
+  if (list.length > 5) return { error: "Anexe no m\u00e1ximo 5 prints" };
+  const files = [];
+  let totalBytes = 0;
+  for (const item of list) {
+    if (typeof item?.data !== "string" || typeof item?.name !== "string")
+      return { error: "Um dos prints \u00e9 inv\u00e1lido" };
+    const match = item.data.match(
+      /^data:([\w.+-]+\/[\w.+-]+);base64,([A-Za-z0-9+/]*={0,2})$/,
+    );
+    if (!match || !supportAttachmentTypes.has(match[1]))
+      return { error: "Use imagens JPG, PNG ou WebP" };
+    const buffer = Buffer.from(match[2], "base64");
+    const validSignature =
+      (match[1] === "image/jpeg" &&
+        buffer[0] === 0xff &&
+        buffer[1] === 0xd8 &&
+        buffer[2] === 0xff) ||
+      (match[1] === "image/png" &&
+        buffer
+          .subarray(0, 8)
+          .equals(
+            Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+          )) ||
+      (match[1] === "image/webp" &&
+        buffer.subarray(0, 4).toString() === "RIFF" &&
+        buffer.subarray(8, 12).toString() === "WEBP");
+    if (
+      buffer.toString("base64") !== match[2] ||
+      !validSignature ||
+      buffer.length > 5 * 1024 * 1024
+    )
+      return {
+        error: "Cada print deve ser uma imagem v\u00e1lida de at\u00e9 5 MB",
+      };
+    totalBytes += buffer.length;
+    if (totalBytes > 12 * 1024 * 1024)
+      return {
+        error: "O tamanho total dos prints n\u00e3o pode passar de 12 MB",
+      };
+    files.push({
+      name:
+        item.name
+          .split(/[\\/]/)
+          .pop()
+          .replace(/[\u0000-\u001f\u007f]/g, "")
+          .slice(0, 180) || "print",
+      mimeType: match[1],
+      dataBase64: match[2],
+    });
+  }
+  return { files };
+};
+
+const supportTicketInclude = {
+  attachments: {
+    select: { id: true, name: true, mimeType: true },
+    orderBy: { createdAt: "asc" },
+  },
+};
+
+const publicSupportTicket = (ticket) => ({
+  id: ticket.id,
+  subject: ticket.subject,
+  description: ticket.description,
+  location: ticket.location,
+  page_url: ticket.pageUrl,
+  status: ticket.status,
+  staff_note: ticket.staffNote,
+  escalated_at: ticket.escalatedAt?.toISOString() ?? null,
+  escalated_by: ticket.escalatedByName ?? null,
+  escalation_note: ticket.escalationNote ?? null,
+  response_saved:
+    Boolean(ticket.responseStatus) && ticket.responseStatus === ticket.status,
+  created_at: ticket.createdAt.toISOString(),
+  updated_at: ticket.updatedAt.toISOString(),
+  attachments: (ticket.attachments || []).map((attachment) => ({
+    id: attachment.id,
+    name: attachment.name,
+    mime_type: attachment.mimeType,
+  })),
+  ...(ticket.user
+    ? {
+        user: {
+          id: ticket.user.id,
+          full_name: ticket.user.fullName,
+          email: ticket.user.email,
+          phone: ticket.user.phone,
+          role: ticket.user.profile?.role ?? null,
+        },
+      }
+    : {}),
+});
+
+const optionalText = (value, max) =>
+  typeof value === "string" ? value.trim().slice(0, max) : "";
+
+app.post("/api/support/tickets", auth, async (request, response) => {
+  const subject = optionalText(request.body?.subject, 120);
+  const description = optionalText(request.body?.description, 4000);
+  if (subject.length < 3)
+    return response
+      .status(400)
+      .json({ error: "Informe um t\u00edtulo para o chamado" });
+  if (description.length < 10)
+    return response.status(400).json({
+      error: "Descreva o que est\u00e1 acontecendo (m\u00ednimo 10 caracteres)",
+    });
+  const parsed = parseSupportAttachments(request.body?.attachments);
+  if (parsed.error) return response.status(400).json({ error: parsed.error });
+  const recentTickets = await prisma.supportTicket.count({
+    where: {
+      userId: request.user.id,
+      createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
+    },
+  });
+  if (recentTickets >= 10)
+    return response.status(429).json({
+      error:
+        "Muitos chamados em pouco tempo. Aguarde um pouco para abrir outro.",
+    });
+  const ticket = await prisma.supportTicket.create({
+    data: {
+      userId: request.user.id,
+      subject,
+      description,
+      location: optionalText(request.body?.location, 200) || null,
+      pageUrl: optionalText(request.body?.pageUrl, 500) || null,
+      userAgent: (request.get("user-agent") || "").slice(0, 300) || null,
+      attachments: { create: parsed.files },
+    },
+    include: supportTicketInclude,
+  });
+  broadcast("support-ticket-created");
+  response.status(201).json({ ticket: publicSupportTicket(ticket) });
+});
+
+app.get("/api/support/tickets", auth, async (request, response) => {
+  const tickets = await prisma.supportTicket.findMany({
+    where: { userId: request.user.id },
+    include: supportTicketInclude,
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+  response.json({ tickets: tickets.map(publicSupportTicket) });
+});
+
+app.get(
+  "/api/support/tickets/:ticketId/attachments/:attachmentId",
+  auth,
+  async (request, response) => {
+    const isStaff = request.user.profile?.role === "admin";
+    const attachment = await prisma.supportTicketAttachment.findFirst({
+      where: {
+        id: request.params.attachmentId,
+        ticketId: request.params.ticketId,
+        ...(isStaff ? {} : { ticket: { userId: request.user.id } }),
+      },
+    });
+    if (!attachment)
+      return response.status(404).json({ error: "Print n\u00e3o encontrado" });
+    response.setHeader("Content-Type", attachment.mimeType);
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.send(Buffer.from(attachment.dataBase64, "base64"));
+  },
+);
+
+// Chamados chegam aos administradores (motoristas, operadores e demais perfis).
+// Chamados de operadores podem ser repassados pelo administrador ao super administrador.
+const supportOriginFilters = {
+  drivers: { user: { profile: { role: "driver" } } },
+  operators: { user: { profile: { role: "operator" } } },
+  others: { user: { profile: { role: { notIn: ["driver", "operator"] } } } },
+  escalated: { escalatedAt: { not: null } },
+};
+
+app.get(
+  "/api/admin/support/tickets",
+  auth,
+  requireAdmin,
+  async (request, response) => {
+    const status = supportTicketStatuses.includes(request.query.status)
+      ? request.query.status
+      : undefined;
+    const originFilter = Object.prototype.hasOwnProperty.call(
+      supportOriginFilters,
+      request.query.origin,
+    )
+      ? supportOriginFilters[request.query.origin]
+      : {};
+    const [tickets, grouped, escalatedOpen] = await Promise.all([
+      prisma.supportTicket.findMany({
+        where: { ...originFilter, ...(status ? { status } : {}) },
+        include: {
+          ...supportTicketInclude,
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              phone: true,
+              profile: { select: { role: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      }),
+      prisma.supportTicket.groupBy({ by: ["status"], _count: { _all: true } }),
+      prisma.supportTicket.count({
+        where: {
+          escalatedAt: { not: null },
+          status: { in: ["open", "in_progress"] },
+        },
+      }),
+    ]);
+    response.json({
+      tickets: tickets.map(publicSupportTicket),
+      counts: Object.fromEntries(
+        grouped.map((item) => [item.status, item._count._all]),
+      ),
+      escalated_open: escalatedOpen,
+    });
+  },
+);
+
+app.post(
+  "/api/admin/support/tickets/:ticketId/escalate",
+  auth,
+  requireAdmin,
+  async (request, response) => {
+    if (request.user.profile?.isSuperAdmin === true)
+      return response.status(403).json({
+        error: "O super administrador é quem recebe os chamados repassados",
+      });
+    const ticket = await prisma.supportTicket.findUnique({
+      where: { id: request.params.ticketId },
+      include: { user: { select: { profile: { select: { role: true } } } } },
+    });
+    if (!ticket)
+      return response.status(404).json({ error: "Chamado não encontrado" });
+    if (ticket.user.profile?.role !== "operator")
+      return response.status(400).json({
+        error:
+          "Só chamados de operadores podem ser repassados ao super administrador",
+      });
+    if (ticket.escalatedAt)
+      return response
+        .status(409)
+        .json({ error: "Este chamado já foi repassado" });
+    if (ticket.status === "resolved")
+      return response.status(409).json({
+        error: "Chamado resolvido: não pode mais ser alterado ou repassado",
+      });
+    const updated = await prisma.supportTicket.update({
+      where: { id: ticket.id },
+      data: {
+        escalatedAt: new Date(),
+        escalatedByName:
+          request.user.fullName || request.user.email || "Administrador",
+        escalationNote: optionalText(request.body?.note, 1000) || null,
+        status: ticket.status === "open" ? "in_progress" : ticket.status,
+      },
+      include: supportTicketInclude,
+    });
+    broadcast("support-ticket-escalated");
+    response.json({ ticket: publicSupportTicket(updated) });
+  },
+);
+
+app.patch(
+  "/api/admin/support/tickets/:ticketId",
+  auth,
+  requireAdmin,
+  async (request, response) => {
+    const data = {};
+    if (request.body?.status !== undefined) {
+      if (!supportTicketStatuses.includes(request.body.status))
+        return response.status(400).json({ error: "Status inv\u00e1lido" });
+      data.status = request.body.status;
+    }
+    if (request.body?.staffNote !== undefined)
+      data.staffNote = optionalText(request.body.staffNote, 2000) || null;
+    if (!Object.keys(data).length)
+      return response.status(400).json({ error: "Nada para atualizar" });
+    const existing = await prisma.supportTicket.findUnique({
+      where: { id: request.params.ticketId },
+      select: {
+        id: true,
+        userId: true,
+        escalatedAt: true,
+        status: true,
+        responseStatus: true,
+      },
+    });
+    if (!existing)
+      return response
+        .status(404)
+        .json({ error: "Chamado n\u00e3o encontrado" });
+    if (existing.escalatedAt && request.user.profile?.isSuperAdmin !== true)
+      return response.status(403).json({
+        error:
+          "Chamado repassado: s\u00f3 o super administrador pode atualiz\u00e1-lo",
+      });
+    if (existing.status === "resolved")
+      return response.status(409).json({
+        error: "Chamado resolvido: não pode mais ser alterado",
+      });
+    // A resposta só pode ser salva de novo depois que o status mudar.
+    const statusChanged =
+      data.status !== undefined && data.status !== existing.status;
+    if (data.staffNote !== undefined) {
+      if (!statusChanged && existing.responseStatus === existing.status)
+        return response.status(409).json({
+          error:
+            "A resposta já foi salva. Altere o status do chamado para enviar outra.",
+        });
+      data.responseStatus = data.status ?? existing.status;
+    } else if (statusChanged) data.responseStatus = null;
+    const ticket = await prisma.supportTicket.update({
+      where: { id: existing.id },
+      data,
+      include: supportTicketInclude,
+    });
+    broadcast("support-ticket-updated", existing.userId);
+    response.json({ ticket: publicSupportTicket(ticket) });
+  },
+);
 
 const superAdminDataModels = {
   User: {
@@ -1678,6 +2037,7 @@ app.get(
         full_name: profile.fullName,
         email: profile.user.email,
         phone: profile.user.phone,
+        birth_date: profile.user.birthDate ?? null,
         role: profile.role,
         requested_role: profile.requestedRole,
         company_id: profile.companyId,
@@ -1763,6 +2123,7 @@ app.get(
         full_name: profile.fullName,
         email: profile.user.email,
         phone: profile.user.phone,
+        birth_date: profile.user.birthDate ?? null,
         role: profile.role,
         requested_role: profile.requestedRole,
         registration_notes: profile.registrationNotes,
@@ -2367,6 +2728,7 @@ app.get(
         id: message.id,
         user_id: message.userId,
         body: message.body,
+        kind: message.kind,
         created_at: message.createdAt.toISOString(),
         freight_offer: message.freightOffer
           ? publicFreightChatOffer(message.freightOffer)
@@ -2428,6 +2790,9 @@ app.post(
   async (request, response) => {
     const { driverId } = request.params;
     const body = request.body || {};
+    return response.status(410).json({
+      error: "O envio de valores para motoristas foi desativado",
+    });
     const collectionPointId =
       typeof body.collectionPointId === "string" ? body.collectionPointId : "";
     const finalCustomerId =
@@ -4038,6 +4403,86 @@ const notifyNearestDriverForRoute = async ({ route, userId, amountCents }) => {
   };
 };
 
+// Alerta (sem valor) enviado no chat de todos os motoristas online sobre rotas disponíveis.
+const alertOnlineDriversAboutRoutes = async ({
+  routes,
+  senderUserId,
+  intro,
+}) => {
+  const drivers = await prisma.driver.findMany({
+    where: { isOnline: true, homologationStatus: "active" },
+    select: { id: true, userId: true },
+  });
+  if (!drivers.length) return { driverCount: 0 };
+  const lines = routes.slice(0, 8).map((route) => {
+    const km = Number.isFinite(route.distanceKm)
+      ? ` (${route.distanceKm.toFixed(0)} km)`
+      : "";
+    return `• ${route.collectionPoint.name} → ${route.finalCustomer.name}${km}`;
+  });
+  if (routes.length > 8) lines.push(`… e mais ${routes.length - 8} rota(s).`);
+  const body =
+    `${intro}\n${lines.join("\n")}\nFale com a operação para pegar a rota.`.slice(
+      0,
+      1000,
+    );
+  await prisma.driverChatMessage.createMany({
+    data: drivers.map((driver) => ({
+      driverId: driver.id,
+      userId: senderUserId,
+      body,
+      kind: "route_alert",
+    })),
+  });
+  for (const driver of drivers) broadcast("route-alert", driver.userId);
+  return { driverCount: drivers.length };
+};
+
+const driverCountText = (count) =>
+  count === 1 ? "1 motorista online" : `${count} motoristas online`;
+
+// Início do dia em Brasília (UTC-3), para "rotas disponíveis do dia".
+const startOfTodayInBrazil = () => {
+  const local = new Date(Date.now() - 3 * 60 * 60 * 1000);
+  return new Date(
+    Date.UTC(
+      local.getUTCFullYear(),
+      local.getUTCMonth(),
+      local.getUTCDate(),
+      3,
+    ),
+  );
+};
+
+app.post(
+  "/api/freight-route-alerts/today",
+  auth,
+  requireOperations,
+  async (request, response) => {
+    const routes = await prisma.freightRoute.findMany({
+      where: { status: "open", createdAt: { gte: startOfTodayInBrazil() } },
+      include: freightRouteInclude,
+      orderBy: { createdAt: "asc" },
+    });
+    if (!routes.length)
+      return response
+        .status(409)
+        .json({ error: "Não há rotas disponíveis hoje para avisar" });
+    const { driverCount } = await alertOnlineDriversAboutRoutes({
+      routes,
+      senderUserId: request.user.id,
+      intro: `Rotas disponíveis hoje (${routes.length}):`,
+    });
+    response.json({
+      route_count: routes.length,
+      driver_count: driverCount,
+      message: driverCount
+        ? `Alerta com ${routes.length} rota(s) enviado para ${driverCountText(driverCount)}.`
+        : "Nenhum motorista online no momento para receber o alerta.",
+    });
+  },
+);
+
 app.post(
   "/api/freight-routes",
   auth,
@@ -4048,13 +4493,7 @@ app.post(
       typeof body.collectionPointId === "string" ? body.collectionPointId : "";
     const finalCustomerId =
       typeof body.finalCustomerId === "string" ? body.finalCustomerId : "";
-    const offerAmountCents = body.amountCents;
-    // A oferta ao motorista mais próximo é opcional: sem valor válido a rota é criada normalmente.
-    const notifyNearestDriver =
-      body.notifyNearestDriver === true &&
-      Number.isSafeInteger(offerAmountCents) &&
-      offerAmountCents > 0 &&
-      offerAmountCents <= 2_147_483_647;
+    const notifyAllDrivers = body.notifyAllDrivers === true;
 
     if (!collectionPointId || !finalCustomerId) {
       return response.status(400).json({
@@ -4122,39 +4561,26 @@ app.post(
       include: freightRouteInclude,
     });
     let notificationMessage = null;
-    let nearestDriver = null;
-    if (notifyNearestDriver && hasCoordinates) {
+    if (notifyAllDrivers) {
       try {
-        const result = await notifyNearestDriverForRoute({
-          route,
-          userId: request.user.id,
-          amountCents: offerAmountCents,
+        const { driverCount } = await alertOnlineDriversAboutRoutes({
+          routes: [route],
+          senderUserId: request.user.id,
+          intro: "Nova rota disponível:",
         });
-        nearestDriver = result.nearestDriver;
-        notificationMessage = result.notificationMessage;
+        notificationMessage = driverCount
+          ? `Rota criada e alerta enviado para ${driverCountText(driverCount)}.`
+          : "Rota criada. Nenhum motorista online no momento para receber o alerta.";
       } catch (error) {
-        console.error("Falha ao enviar oferta da rota", error);
+        console.error("Falha ao enviar alerta da rota", error);
         notificationMessage =
-          "Rota criada, mas não foi possível enviar a oferta ao motorista.";
+          "Rota criada, mas não foi possível enviar o alerta aos motoristas.";
       }
     }
     broadcast("freight-route-created");
-    const updatedRoute = nearestDriver
-      ? await prisma.freightRoute.findUnique({
-          where: { id: route.id },
-          include: freightRouteInclude,
-        })
-      : route;
     response.status(201).json({
-      route: publicFreightRoute(updatedRoute),
+      route: publicFreightRoute(route),
       notification_message: notificationMessage,
-      notified_driver: nearestDriver
-        ? {
-            id: nearestDriver.driver.id,
-            full_name: nearestDriver.driver.fullName,
-            distance_km: nearestDriver.distanceKm,
-          }
-        : null,
     });
   },
 );
@@ -4164,13 +4590,9 @@ app.post(
   auth,
   requireOperations,
   async (request, response) => {
-    const amountCents = request.body?.amountCents;
-    if (
-      !Number.isSafeInteger(amountCents) ||
-      amountCents <= 0 ||
-      amountCents > 2_147_483_647
-    )
-      return response.status(400).json({ error: "Informe um valor válido" });
+    return response.status(410).json({
+      error: "O envio de valores para motoristas foi desativado",
+    });
 
     const route = await prisma.freightRoute.findUnique({
       where: { id: request.params.routeId },

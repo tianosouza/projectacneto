@@ -50,6 +50,11 @@ import { AuthScreen, InitialPasswordScreen } from "@/components/AuthScreen";
 import { DriverPortal } from "@/components/DriverPortal";
 import { ClientPortal } from "@/components/ClientPortal";
 import { AccountCenter } from "@/components/AccountCenter";
+import { SupportWidget } from "@/components/SupportWidget";
+import {
+  SupportTicketsAdmin,
+  useSupportBadge,
+} from "@/components/SupportTicketsAdmin";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { DirectoryPanel, MetricCard } from "@/components/DashboardPrimitives";
 import { DirectorySearch as ReusableDirectorySearch } from "@/components/DirectorySearch";
@@ -100,6 +105,16 @@ const normalizeGeocodeText = (value: string) =>
     .replace(/[\u0300-\u036f]/g, "");
 
 function App() {
+  const { user, profile } = useAuth();
+  return (
+    <>
+      <AppRoutes />
+      {user && !profile?.must_change_password && <SupportWidget />}
+    </>
+  );
+}
+
+function AppRoutes() {
   const { user, profile, loading, signOut } = useAuth();
 
   if (loading) {
@@ -184,6 +199,7 @@ function CarrierDashboard({
   accountUser: {
     email: string;
     phone?: string | null;
+    birth_date?: string | null;
     user_metadata: { full_name?: string };
   };
   accountProfile: { role: string; created_at: string } | null;
@@ -859,6 +875,7 @@ function RoleDashboard({
   accountUser: {
     email: string;
     phone?: string | null;
+    birth_date?: string | null;
     user_metadata: { full_name?: string };
   };
   accountProfile: { role: string; created_at: string } | null;
@@ -956,8 +973,10 @@ function RoleDashboard({
     | "rotas"
     | "conta"
     | "solicitacoes"
+    | "chamados"
     | "dados"
   >("resumo");
+  const supportBadge = useSupportBadge(role === "admin", isSuperAdmin);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [selectedClientIds, setSelectedClientIds] = useState<string[]>([]);
   const [routePath, setRoutePath] = useState<LatLngTuple[]>([]);
@@ -2535,6 +2554,23 @@ function RoleDashboard({
               )}
             </button>
           )}
+          {role === "admin" && (
+            <button
+              onClick={() => setTab("chamados")}
+              className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
+                tab === "chamados"
+                  ? "bg-white text-[#0b1d3a] shadow-sm"
+                  : "text-slate-500"
+              }`}
+            >
+              <span>Chamados</span>
+              {supportBadge > 0 && (
+                <span className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                  {supportBadge}
+                </span>
+              )}
+            </button>
+          )}
           {isSuperAdmin && (
             <button
               onClick={() => setTab("dados")}
@@ -3297,6 +3333,8 @@ function RoleDashboard({
           />
         ) : tab === "dados" && isSuperAdmin ? (
           <SuperAdminDataManager />
+        ) : tab === "chamados" && role === "admin" ? (
+          <SupportTicketsAdmin isSuperAdmin={isSuperAdmin} />
         ) : tab === "solicitacoes" ? (
           <div className="space-y-5">
             <PendingVehiclesPanel
@@ -3355,6 +3393,7 @@ function RoleDashboard({
               email: accountUser.email,
               full_name: accountUser.user_metadata.full_name,
               phone: accountUser.phone,
+              birth_date: accountUser.birth_date,
             }}
             profile={accountProfile}
           />

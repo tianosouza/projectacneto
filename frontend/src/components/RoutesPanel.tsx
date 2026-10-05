@@ -10,6 +10,7 @@ import { divIcon, type LatLngTuple } from "leaflet";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   BarChart3,
+  Bell,
   Download,
   DollarSign,
   Factory,
@@ -255,8 +256,7 @@ function NewRouteModal({
   const [form, setForm] = useState({
     collectionPointId: "",
     finalCustomerId: "",
-    notifyNearestDriver: false,
-    amount: "",
+    notifyAllDrivers: false,
   });
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -268,8 +268,7 @@ function NewRouteModal({
     setForm({
       collectionPointId: "",
       finalCustomerId: "",
-      notifyNearestDriver: false,
-      amount: "",
+      notifyAllDrivers: false,
     });
     setError("");
     setSuccess("");
@@ -288,16 +287,6 @@ function NewRouteModal({
       setError("Posto de coleta e cliente final devem ser diferentes");
       return;
     }
-    const amountCents = Math.round(Number(form.amount) * 100);
-    if (
-      form.notifyNearestDriver &&
-      (!Number.isSafeInteger(amountCents) ||
-        amountCents <= 0 ||
-        amountCents > 2_147_483_647)
-    ) {
-      setError("Informe um valor válido para o frete");
-      return;
-    }
     setSaving(true);
     try {
       const response = await apiFetch("/api/freight-routes", {
@@ -306,8 +295,7 @@ function NewRouteModal({
         body: JSON.stringify({
           collectionPointId: form.collectionPointId,
           finalCustomerId: form.finalCustomerId,
-          notifyNearestDriver: form.notifyNearestDriver,
-          amountCents: form.notifyNearestDriver ? amountCents : undefined,
+          notifyAllDrivers: form.notifyAllDrivers,
         }),
       });
       const body = (await response.json()) as {
@@ -378,11 +366,11 @@ function NewRouteModal({
           <label className="flex items-start gap-3 rounded-xl border border-slate-200 p-3 text-sm text-slate-700">
             <input
               type="checkbox"
-              checked={form.notifyNearestDriver}
+              checked={form.notifyAllDrivers}
               onChange={(event) =>
                 setForm({
                   ...form,
-                  notifyNearestDriver: event.target.checked,
+                  notifyAllDrivers: event.target.checked,
                 })
               }
               disabled={done}
@@ -390,31 +378,14 @@ function NewRouteModal({
             />
             <span>
               <span className="block font-semibold text-[#0b1d3a]">
-                Disponibilizar para frete (opcional)
+                Enviar alerta para todos os motoristas online (opcional)
               </span>
               <span className="mt-0.5 block text-xs text-slate-500">
-                Enviar uma oferta ao motorista disponível mais próximo do posto.
-                Exige o valor do frete.
+                Avisa os motoristas online que há uma nova rota disponível. Não
+                precisa informar valor.
               </span>
             </span>
           </label>
-          {form.notifyNearestDriver && (
-            <label className="block text-xs font-semibold text-slate-600">
-              Valor do frete (R$) *
-              <input
-                type="number"
-                min="0.01"
-                step="0.01"
-                value={form.amount}
-                onChange={(event) =>
-                  setForm({ ...form, amount: event.target.value })
-                }
-                disabled={done}
-                placeholder="Ex.: 850.00"
-                className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-normal outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-              />
-            </label>
-          )}
         </div>
 
         {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
@@ -455,9 +426,8 @@ function RoutesListTab({ drivers }: { drivers: DemoDriver[] }) {
   const [showModal, setShowModal] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [assignDriverId, setAssignDriverId] = useState("");
-  const [nearestOfferAmount, setNearestOfferAmount] = useState("");
-  const [sendingNearestOffer, setSendingNearestOffer] = useState(false);
-  const [nearestOfferMessage, setNearestOfferMessage] = useState("");
+  const [alertSending, setAlertSending] = useState(false);
+  const [alertMessage, setAlertMessage] = useState("");
   const [error, setError] = useState("");
   const [locations, setLocations] = useState<DemoContact[]>([]);
   const [mapRouteIds, setMapRouteIds] = useState<string[]>([]);
@@ -528,11 +498,6 @@ function RoutesListTab({ drivers }: { drivers: DemoDriver[] }) {
   );
   const selected = routes.find((route) => route.id === selectedId) ?? null;
 
-  useEffect(() => {
-    setNearestOfferAmount("");
-    setNearestOfferMessage("");
-  }, [selectedId]);
-
   const toggleMapRoute = (routeId: string) => {
     setMapRouteIds((current) =>
       current.includes(routeId)
@@ -562,44 +527,6 @@ function RoutesListTab({ drivers }: { drivers: DemoDriver[] }) {
     }
     setAssignDriverId("");
     await refresh();
-  };
-
-  const notifyNearestDriver = async () => {
-    if (!selected) return;
-    const amountCents = Math.round(Number(nearestOfferAmount) * 100);
-    if (
-      !Number.isSafeInteger(amountCents) ||
-      amountCents <= 0 ||
-      amountCents > 2_147_483_647
-    ) {
-      setError("Informe um valor válido para o frete");
-      return;
-    }
-    setError("");
-    setNearestOfferMessage("");
-    setSendingNearestOffer(true);
-    try {
-      const response = await apiFetch(
-        `/api/freight-routes/${selected.id}/offers/nearest`,
-        {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ amountCents }),
-        },
-      );
-      const body = (await response.json()) as {
-        error?: string;
-        notification_message?: string;
-      };
-      if (!response.ok)
-        throw new Error(body.error ?? "Não foi possível enviar a oferta");
-      setNearestOfferMessage(body.notification_message ?? "Oferta processada.");
-      await refresh();
-    } catch (cause) {
-      setError((cause as Error).message);
-    } finally {
-      setSendingNearestOffer(false);
-    }
   };
 
   const endAssignment = async (assignmentId: string, status: "cancelled") => {
@@ -657,6 +584,36 @@ function RoutesListTab({ drivers }: { drivers: DemoDriver[] }) {
     await refresh();
   };
 
+  const alertAvailableRoutes = async () => {
+    if (alertSending) return;
+    if (
+      !window.confirm(
+        "Enviar alerta com as rotas disponíveis de hoje para todos os motoristas online?",
+      )
+    )
+      return;
+    setError("");
+    setAlertMessage("");
+    setAlertSending(true);
+    try {
+      const response = await apiFetch("/api/freight-route-alerts/today", {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const body = (await response.json()) as {
+        error?: string;
+        message?: string;
+      };
+      if (!response.ok)
+        throw new Error(body.error ?? "Não foi possível enviar o alerta");
+      setAlertMessage(body.message ?? "Alerta enviado.");
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setAlertSending(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
@@ -672,15 +629,31 @@ function RoutesListTab({ drivers }: { drivers: DemoDriver[] }) {
             </option>
           ))}
         </select>
-        <button
-          type="button"
-          onClick={() => setShowModal(true)}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#1052c7] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#0b3f9f]"
-        >
-          <Plus size={16} /> Nova rota
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            onClick={() => void alertAvailableRoutes()}
+            disabled={alertSending}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+          >
+            <Bell size={16} />{" "}
+            {alertSending ? "Enviando..." : "Alertar motoristas online"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowModal(true)}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#1052c7] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#0b3f9f]"
+          >
+            <Plus size={16} /> Nova rota
+          </button>
+        </div>
       </div>
 
+      {alertMessage && (
+        <p className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          {alertMessage}
+        </p>
+      )}
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
       <div className="grid gap-4 xl:grid-cols-[0.9fr_1.4fr]">
@@ -752,48 +725,6 @@ function RoutesListTab({ drivers }: { drivers: DemoDriver[] }) {
             </div>
 
             <div>
-              {selected.status === "open" &&
-                !selected.chat_offers.some(
-                  (offer) => offer.status === "offered",
-                ) && (
-                  <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50/50 p-3">
-                    <p className="text-sm font-semibold text-[#0b1d3a]">
-                      Notificar motorista disponível mais próximo
-                    </p>
-                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                      <label className="flex-1 text-xs font-semibold text-slate-600">
-                        Valor do frete (R$)
-                        <input
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          value={nearestOfferAmount}
-                          onChange={(event) =>
-                            setNearestOfferAmount(event.target.value)
-                          }
-                          placeholder="Ex.: 850.00"
-                          disabled={sendingNearestOffer}
-                          className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal"
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => void notifyNearestDriver()}
-                        disabled={sendingNearestOffer}
-                        className="self-end rounded-lg bg-[#1052c7] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                      >
-                        {sendingNearestOffer
-                          ? "Enviando..."
-                          : "Notificar motorista"}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              {nearestOfferMessage && (
-                <p className="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                  {nearestOfferMessage}
-                </p>
-              )}
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Motoristas e ofertas negociadas
               </p>

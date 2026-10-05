@@ -87,6 +87,7 @@ export function DriverPortal() {
   const [tab, setTab] = useState<Tab>("home");
   const [driver, setDriver] = useState<Driver | null>(null);
   const [freightOfferNotice, setFreightOfferNotice] = useState(false);
+  const [routeAlertNotice, setRouteAlertNotice] = useState(false);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [locationStatus, setLocationStatus] = useState<
@@ -121,6 +122,7 @@ export function DriverPortal() {
         const payload = JSON.parse(event.data) as { type?: string };
         if (payload.type === "nearest-driver-freight-offer")
           setFreightOfferNotice(true);
+        if (payload.type === "route-alert") setRouteAlertNotice(true);
       } catch {
         // Ignore malformed SSE payloads.
       }
@@ -493,6 +495,38 @@ export function DriverPortal() {
         </div>
       )}
 
+      {routeAlertNotice && (
+        <div className="fixed inset-x-4 top-20 z-40 mx-auto flex max-w-lg items-center gap-3 rounded-xl border border-amber-200 bg-white p-4 shadow-lg">
+          <MessageCircle className="shrink-0 text-amber-600" size={22} />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-[#0b1d3a]">
+              Rotas disponíveis
+            </p>
+            <p className="text-xs text-slate-500">
+              A operação enviou um alerta de rotas. Veja no chat.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setRouteAlertNotice(false);
+              setTab("chat");
+            }}
+            className="shrink-0 rounded-lg bg-[#1052c7] px-3 py-2 text-xs font-semibold text-white"
+          >
+            Ver alerta
+          </button>
+          <button
+            type="button"
+            onClick={() => setRouteAlertNotice(false)}
+            aria-label="Fechar alerta de rotas"
+            className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
       {locationPromptOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-4 sm:items-center">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
@@ -645,6 +679,7 @@ export function DriverPortal() {
               email: user?.email ?? driver.email ?? "",
               full_name: user?.user_metadata.full_name ?? driver.full_name,
               phone: driver.phone,
+              birth_date: user?.birth_date,
             }}
             profile={profile}
             driver={driver}

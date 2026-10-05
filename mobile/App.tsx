@@ -294,6 +294,7 @@ function AppContent() {
   >(null);
   const [screen, setScreen] = useState<MobileScreen>("home");
   const seenOfferIds = useRef(new Set<string>());
+  const seenAlertIds = useRef(new Set<string>());
 
   useEffect(() => {
     void restoreSession();
@@ -332,7 +333,10 @@ function AppContent() {
         if (!response.ok) return;
         const body = (await response.json()) as {
           messages?: Array<{
+            id: string;
             body: string;
+            kind?: string;
+            created_at: string;
             freight_offer?: { id: string; status: string } | null;
           }>;
         };
@@ -341,6 +345,27 @@ function AppContent() {
             message.freight_offer?.status === "offered" &&
             !seenOfferIds.current.has(message.freight_offer.id),
         );
+        // Alertas de rotas: só os recentes (15 min) e uma única vez por mensagem.
+        const recentAlerts = (body.messages ?? []).filter(
+          (message) =>
+            message.kind === "route_alert" &&
+            !seenAlertIds.current.has(message.id) &&
+            Date.now() - new Date(message.created_at).getTime() <
+              15 * 60 * 1000,
+        );
+        for (const message of body.messages ?? [])
+          if (message.kind === "route_alert")
+            seenAlertIds.current.add(message.id);
+        if (recentAlerts.length > 0) {
+          Alert.alert(
+            "Rotas disponíveis",
+            recentAlerts[recentAlerts.length - 1].body,
+            [
+              { text: "Depois", style: "cancel" },
+              { text: "Abrir chat", onPress: () => setScreen("chat") },
+            ],
+          );
+        }
         for (const message of pendingOffers) {
           const offerId = message.freight_offer?.id;
           if (offerId) seenOfferIds.current.add(offerId);

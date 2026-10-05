@@ -21,6 +21,7 @@ type User = {
   id: string;
   email: string;
   phone?: string | null;
+  birth_date?: string | null;
   app_metadata: { provider: string };
   user_metadata: { full_name?: string };
   aud: string;
@@ -37,6 +38,7 @@ const createApiSession = (
     email: string;
     full_name?: string | null;
     phone?: string | null;
+    birth_date?: string | null;
   },
 ) => ({
   access_token: accessToken,
@@ -48,6 +50,7 @@ const createApiSession = (
     id: apiUser.id,
     email: apiUser.email,
     phone: apiUser.phone,
+    birth_date: apiUser.birth_date,
     app_metadata: { provider: "api" },
     user_metadata: { full_name: apiUser.full_name ?? undefined },
     aud: "authenticated",
@@ -157,6 +160,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             email: string;
             full_name?: string | null;
             phone?: string | null;
+            birth_date?: string | null;
           };
           profile: Parameters<typeof apiProfile>[0];
         }>;
@@ -188,6 +192,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           email: string;
           full_name?: string | null;
           phone?: string | null;
+          birth_date?: string | null;
         };
         profile?: Parameters<typeof apiProfile>[0];
       };
