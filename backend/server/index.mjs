@@ -3258,6 +3258,22 @@ const ensureRoutableLocation = (location) => {
     throw new Error("Informe endereço, cidade, UF e GPS válidos para o local");
 };
 
+const resolveExistingCompanyIds = async (transaction, companyIds) => {
+  if (!companyIds.length) return [];
+  const existingCompanies = await transaction.transportCompany.findMany({
+    where: { id: { in: companyIds } },
+    select: { id: true },
+  });
+  const existingIds = new Set(existingCompanies.map((company) => company.id));
+  const invalidIds = companyIds.filter((id) => !existingIds.has(id));
+  if (invalidIds.length) {
+    throw new Error(
+      `Transportadoras inválidas ou não persistidas: ${invalidIds.join(", ")}`,
+    );
+  }
+  return companyIds;
+};
+
 app.get(
   "/api/operations/locations",
   auth,
@@ -3295,12 +3311,16 @@ app.post(
       const location = await prisma.$transaction(async (transaction) => {
         const data = locationPayload(request.body);
         ensureRoutableLocation(data);
+        const existingCompanyIds = await resolveExistingCompanyIds(
+          transaction,
+          companyIds,
+        );
         const createdLocation = await transaction.operationalLocation.create({
           data,
         });
-        if (companyIds.length) {
+        if (existingCompanyIds.length) {
           await transaction.operationalLocationCompanyAccess.createMany({
-            data: companyIds.map((companyId) => ({
+            data: existingCompanyIds.map((companyId) => ({
               locationId: createdLocation.id,
               companyId,
             })),
@@ -3362,12 +3382,16 @@ app.patch(
           where: { id: request.params.locationId },
           data,
         });
+        const existingCompanyIds = await resolveExistingCompanyIds(
+          transaction,
+          companyIds,
+        );
         await transaction.operationalLocationCompanyAccess.deleteMany({
           where: { locationId: updatedLocation.id },
         });
-        if (companyIds.length) {
+        if (existingCompanyIds.length) {
           await transaction.operationalLocationCompanyAccess.createMany({
-            data: companyIds.map((companyId) => ({
+            data: existingCompanyIds.map((companyId) => ({
               locationId: updatedLocation.id,
               companyId,
             })),
@@ -4403,14 +4427,10 @@ const notifyNearestDriverForRoute = async ({ route, userId, amountCents }) => {
   };
 };
 
-// Alerta (sem valor) enviado no chat de todos os motoristas online sobre rotas disponíveis.
-const alertOnlineDriversAboutRoutes = async ({
-  routes,
-  senderUserId,
-  intro,
-}) => {
+// Alerta persistido no chat de todos os motoristas homologados, independentemente do estado online.
+const alertDriversAboutRoutes = async ({ routes, senderUserId, intro }) => {
   const drivers = await prisma.driver.findMany({
-    where: { isOnline: true, homologationStatus: "active" },
+    where: { homologationStatus: "active" },
     select: { id: true, userId: true },
   });
   if (!drivers.length) return { driverCount: 0 };
@@ -4439,7 +4459,7 @@ const alertOnlineDriversAboutRoutes = async ({
 };
 
 const driverCountText = (count) =>
-  count === 1 ? "1 motorista online" : `${count} motoristas online`;
+  count === 1 ? "1 motorista homologado" : `${count} motoristas homologados`;
 
 // Início do dia em Brasília (UTC-3), para "rotas disponíveis do dia".
 const startOfTodayInBrazil = () => {
@@ -4468,7 +4488,7 @@ app.post(
       return response
         .status(409)
         .json({ error: "Não há rotas disponíveis hoje para avisar" });
-    const { driverCount } = await alertOnlineDriversAboutRoutes({
+    const { driverCount } = await alertDriversAboutRoutes({
       routes,
       senderUserId: request.user.id,
       intro: `Rotas disponíveis hoje (${routes.length}):`,
@@ -4478,7 +4498,7 @@ app.post(
       driver_count: driverCount,
       message: driverCount
         ? `Alerta com ${routes.length} rota(s) enviado para ${driverCountText(driverCount)}.`
-        : "Nenhum motorista online no momento para receber o alerta.",
+        : "Nenhum motorista homologado para receber o alerta.",
     });
   },
 );
@@ -4563,14 +4583,14 @@ app.post(
     let notificationMessage = null;
     if (notifyAllDrivers) {
       try {
-        const { driverCount } = await alertOnlineDriversAboutRoutes({
+        const { driverCount } = await alertDriversAboutRoutes({
           routes: [route],
           senderUserId: request.user.id,
           intro: "Nova rota disponível:",
         });
         notificationMessage = driverCount
           ? `Rota criada e alerta enviado para ${driverCountText(driverCount)}.`
-          : "Rota criada. Nenhum motorista online no momento para receber o alerta.";
+          : "Rota criada. Nenhum motorista homologado para receber o alerta.";
       } catch (error) {
         console.error("Falha ao enviar alerta da rota", error);
         notificationMessage =

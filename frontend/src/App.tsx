@@ -67,6 +67,8 @@ import { RoutesPanel } from "@/components/RoutesPanel";
 import { SuperAdminDataManager } from "@/components/SuperAdminDataManager";
 import { apiEventSource, apiFetch } from "@/lib/api";
 
+const SUPPORT_ENABLED = false;
+
 const brazilianStates = [
   ["AC", "Acre"],
   ["AL", "Alagoas"],
@@ -109,7 +111,9 @@ function App() {
   return (
     <>
       <AppRoutes />
-      {user && !profile?.must_change_password && <SupportWidget />}
+      {SUPPORT_ENABLED && user && !profile?.must_change_password && (
+        <SupportWidget />
+      )}
     </>
   );
 }
@@ -2554,7 +2558,7 @@ function RoleDashboard({
               )}
             </button>
           )}
-          {role === "admin" && (
+          {SUPPORT_ENABLED && role === "admin" && (
             <button
               onClick={() => setTab("chamados")}
               className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition ${
@@ -3333,7 +3337,7 @@ function RoleDashboard({
           />
         ) : tab === "dados" && isSuperAdmin ? (
           <SuperAdminDataManager />
-        ) : tab === "chamados" && role === "admin" ? (
+        ) : SUPPORT_ENABLED && tab === "chamados" && role === "admin" ? (
           <SupportTicketsAdmin isSuperAdmin={isSuperAdmin} />
         ) : tab === "solicitacoes" ? (
           <div className="space-y-5">
