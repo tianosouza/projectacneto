@@ -33,7 +33,9 @@ type MobileScreen =
   | "routes"
   | "freights"
   | "chat"
-  | "settings";
+  | "settings"
+  // Não é uma tela: abre o mural de rotas por cima da tela inicial.
+  | "board";
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 const LOCATION_TASK = "acneto-driver-location";
@@ -317,6 +319,9 @@ function AppContent() {
     setScreen("home");
     setRouteBoardOpen(true);
   };
+
+  const navigate = (nextScreen: MobileScreen) =>
+    nextScreen === "board" ? openRouteBoard() : setScreen(nextScreen);
 
   useEffect(() => {
     void restoreSession();
@@ -607,8 +612,13 @@ function AppContent() {
             notes: updated.notes,
           }),
         });
-        if (!response.ok)
-          throw new Error("Não foi possível salvar seus dados.");
+        if (!response.ok) {
+          // Mostra o motivo do servidor (ex.: telefone já cadastrado).
+          const failure = (await response.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          throw new Error(failure.error ?? "Não foi possível salvar seus dados.");
+        }
         const body = (await response.json()) as { driver?: Driver };
         setDriver(body.driver ?? updated);
         await AsyncStorage.setItem(
@@ -657,7 +667,7 @@ function AppContent() {
         saving={submitting}
         onSave={saveDriverProfile}
         onBack={() => setScreen("home")}
-        onNavigate={(nextScreen) => setScreen(nextScreen)}
+        onNavigate={navigate}
       />
     );
   }
@@ -667,7 +677,7 @@ function AppContent() {
       <VehicleScreen
         driver={driver}
         onBack={() => setScreen("home")}
-        onNavigate={(nextScreen) => setScreen(nextScreen)}
+        onNavigate={navigate}
       />
     );
   }
@@ -675,7 +685,7 @@ function AppContent() {
     return (
       <DriverRoutesScreen
         token={token}
-        onNavigate={(nextScreen) => setScreen(nextScreen)}
+        onNavigate={navigate}
       />
     );
   }
@@ -683,7 +693,7 @@ function AppContent() {
     return (
       <DriverFreightsScreen
         token={token}
-        onNavigate={(nextScreen) => setScreen(nextScreen)}
+        onNavigate={navigate}
       />
     );
   }
@@ -693,7 +703,7 @@ function AppContent() {
       <SettingsScreen
         onBack={() => setScreen("home")}
         onLogout={logout}
-        onNavigate={(nextScreen) => setScreen(nextScreen)}
+        onNavigate={navigate}
       />
     );
   }
@@ -709,7 +719,7 @@ function AppContent() {
         onOpenVehicle={() => setScreen("vehicle")}
         onOpenChat={() => setScreen("chat")}
         onStatusChange={(status) => void updateDriverStatus(status)}
-        onNavigateScreen={(nextScreen) => setScreen(nextScreen)}
+        onNavigateScreen={navigate}
       />
       {screen === "chat" && (
         <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
@@ -1073,6 +1083,49 @@ function DriverRoutesScreen({
     }
   };
 
+  // A operação é avisada pelo chat e a rota volta para o mural.
+  const cancelAssignment = (routeId: string, assignmentId: string) =>
+    Alert.alert(
+      "Cancelar esta rota?",
+      "A operação será avisada pelo chat e a rota volta para o mural.",
+      [
+        { text: "Voltar", style: "cancel" },
+        {
+          text: "Cancelar rota",
+          style: "destructive",
+          onPress: async () => {
+            setSavingId(assignmentId);
+            setError("");
+            try {
+              const response = await apiFetch(
+                `/api/freight-routes/${routeId}/assignments/${assignmentId}`,
+                {
+                  method: "PATCH",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                  },
+                  body: JSON.stringify({ status: "cancelled" }),
+                },
+              );
+              const body = (await response.json().catch(() => ({}))) as {
+                error?: string;
+              };
+              if (!response.ok)
+                throw new Error(
+                  body.error ?? "Não foi possível cancelar a rota.",
+                );
+              await load();
+            } catch (cause) {
+              setError((cause as Error).message);
+            } finally {
+              setSavingId(null);
+            }
+          },
+        },
+      ],
+    );
+
   const labels: Record<DriverFreightProgress, string> = {
     assigned: "Aguardando início da viagem",
     en_route_collection: "A caminho do posto de coleta",
@@ -1177,6 +1230,17 @@ function DriverRoutesScreen({
                 <Text style={{ color: "#b45309", fontSize: 12, marginTop: 10 }}>
                   Aguardando confirmação de chegada pela operação.
                 </Text>
+              )}
+              {assignment.status === "active" && (
+                <TouchableOpacity
+                  disabled={savingId === assignment.id}
+                  onPress={() => cancelAssignment(route.id, assignment.id)}
+                  style={styles.cancelRouteButton}
+                >
+                  <Text style={styles.cancelRouteButtonText}>
+                    Cancelar minha parte
+                  </Text>
+                </TouchableOpacity>
               )}
             </View>
           );
@@ -1730,6 +1794,7 @@ function MobileBottomNav({
   const insets = useSafeAreaInsets();
   const items = [
     ["home", "⌂", "Início"],
+    ["board", "▦", "Mural"],
     ["driver-data", "♙", "Perfil"],
     ["routes", "↗", "Rotas"],
     ["freights", "$", "Fretes"],
@@ -2176,6 +2241,14 @@ function DataScreenHeader({
 }
 
 const styles = StyleSheet.create({
+  cancelRouteButton: {
+    alignItems: "center",
+    backgroundColor: "#fff1f2",
+    borderRadius: 10,
+    marginTop: 10,
+    paddingVertical: 10,
+  },
+  cancelRouteButtonText: { color: "#be123c", fontSize: 13, fontWeight: "700" },
   forgotLink: {
     color: "#f3d32e",
     fontSize: 14,

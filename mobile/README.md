@@ -4,13 +4,17 @@ Aplicativo React Native/Expo para motoristas. Ele usa os mesmos endpoints `/api`
 
 ## Configuração
 
-O app não possui domínio de API embutido. Configure `EXPO_PUBLIC_API_URL` apontando para o mesmo backend que atende o frontend:
+O app não possui domínio de API embutido no código. A URL é lida de `EXPO_PUBLIC_API_URL` **no momento do build** e fica gravada no APK, então ela precisa ser a mesma API usada pelo portal web (`VITE_API_URL` no `fly.toml` da raiz).
 
-```powershell
-$env:EXPO_PUBLIC_API_URL = "https://acneto-api-red-log-1872.fly.dev"
+Configure no arquivo `mobile/.env` (fora do git):
+
+```env
+EXPO_PUBLIC_API_URL="https://nextdrivertesteapi.fly.dev"
 ```
 
-O arquivo `.env` do mobile já aponta para a API de produção. No desenvolvimento local, substitua temporariamente o valor pelo IP do computador na mesma rede Wi-Fi; `localhost` apontaria para o próprio celular.
+Não defina a variável no terminal (`$env:EXPO_PUBLIC_API_URL = ...`): ela tem prioridade sobre o `.env` e já fez um APK sair apontando para uma API antiga. Para conferir, rode `echo $env:EXPO_PUBLIC_API_URL` antes do build; o resultado deve ser vazio.
+
+No desenvolvimento local, troque temporariamente o valor do `.env` pelo IP do computador na mesma rede Wi-Fi; `localhost` apontaria para o próprio celular. Volte para a URL de produção antes de gerar o APK.
 
 ## Desenvolvimento
 

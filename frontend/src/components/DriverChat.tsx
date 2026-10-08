@@ -46,7 +46,6 @@ export function DriverChat({
   participantName,
   initiallyOpen = false,
   openingProposal,
-  freightContext,
   onOpenRouteBoard,
   alert,
 }: {
@@ -95,7 +94,6 @@ export function DriverChat({
   const sentProposalKeysRef = useRef(new Set<string>());
   const proposalInFlightRef = useRef<string | null>(null);
   const latestMessageId = messages[messages.length - 1]?.id ?? null;
-  const isOperationsUser = ["admin", "operator"].includes(profile?.role ?? "");
 
   useEffect(() => {
     messagesRef.current = messages;
