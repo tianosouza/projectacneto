@@ -17,7 +17,6 @@ import {
   UserPlus,
   Users,
   MapPin,
-  CalendarDays,
   ArrowRight,
   MessageCircle,
   Pencil,
@@ -63,6 +62,13 @@ import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { SettingsMenu } from "@/components/SettingsMenu";
 import { DriverChat } from "@/components/DriverChat";
 import { DriverChatArchive } from "@/components/DriverChatArchive";
+import { DriverChatAlerts } from "@/components/DriverChatAlerts";
+import {
+  PasswordResetRequestsPanel,
+  usePasswordResetRequests,
+} from "@/components/PasswordResetRequestsPanel";
+import { MapsLocationLookupModal } from "@/components/MapsLocationLookupModal";
+import type { MapPoint } from "@/lib/mapLink";
 import { RoutesPanel } from "@/components/RoutesPanel";
 import { SuperAdminDataManager } from "@/components/SuperAdminDataManager";
 import { apiEventSource, apiFetch } from "@/lib/api";
@@ -105,6 +111,32 @@ const normalizeGeocodeText = (value: string) =>
     .toLocaleLowerCase("pt-BR")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
+
+// Palavras gen\u00e9ricas de logradouro/endere\u00e7o que n\u00e3o identificam a via.
+const genericAddressWords = new Set([
+  "rua",
+  "avenida",
+  "travessa",
+  "rodovia",
+  "estrada",
+  "alameda",
+  "praca",
+  "viela",
+  "beco",
+  "ladeira",
+  "bairro",
+  "centro",
+  "numero",
+  "quadra",
+  "lote",
+  "setor",
+  "conjunto",
+  "residencial",
+  "loteamento",
+  "jardim",
+  "vila",
+  "proximo",
+]);
 
 function App() {
   const { user, profile } = useAuth();
@@ -229,19 +261,7 @@ function CarrierDashboard({
     email: "",
     phone: "",
     password: "",
-    birthDate: "",
-    cpf: "",
-    cnh: "",
-    cnhCategory: "",
-    cnhExpiresAt: "",
-    city: "",
-    state: "",
-    vehicleModel: "",
-    vehicleYear: "",
-    plate: "",
-    capacity: "",
     compartments: "",
-    locationSharingAuthorized: false,
   });
   const [vehicleForm, setVehicleForm] = useState({
     type: "",
@@ -316,19 +336,7 @@ function CarrierDashboard({
       email: "",
       phone: "",
       password: "",
-      birthDate: "",
-      cpf: "",
-      cnh: "",
-      cnhCategory: "",
-      cnhExpiresAt: "",
-      city: "",
-      state: "",
-      vehicleModel: "",
-      vehicleYear: "",
-      plate: "",
-      capacity: "",
       compartments: "",
-      locationSharingAuthorized: false,
     });
     setDriverStatusMessage(
       "Motorista cadastrado e em análise. Aguarde a aprovação do operador ou administrador.",
@@ -486,145 +494,6 @@ function CarrierDashboard({
                     type="password"
                     className={registrationInputClass}
                   />
-                  <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-500">
-                    <CalendarDays
-                      size={18}
-                      className="shrink-0 text-slate-400"
-                    />
-                    <input
-                      type="date"
-                      value={driverForm.birthDate}
-                      max={new Date().toISOString().slice(0, 10)}
-                      onChange={(e) =>
-                        setDriverForm((form) => ({
-                          ...form,
-                          birthDate: e.target.value,
-                        }))
-                      }
-                      className="min-w-0 flex-1 bg-transparent outline-none"
-                      aria-label="Data de nascimento *"
-                    />
-                  </label>
-                  <input
-                    value={driverForm.cpf}
-                    onChange={(e) =>
-                      setDriverForm((form) => ({
-                        ...form,
-                        cpf: e.target.value,
-                      }))
-                    }
-                    placeholder="CPF *"
-                    className={registrationInputClass}
-                  />
-                  <input
-                    value={driverForm.cnh}
-                    onChange={(e) =>
-                      setDriverForm((form) => ({
-                        ...form,
-                        cnh: e.target.value,
-                      }))
-                    }
-                    placeholder="CNH *"
-                    className={registrationInputClass}
-                  />
-                  <input
-                    value={driverForm.cnhCategory}
-                    onChange={(e) =>
-                      setDriverForm((form) => ({
-                        ...form,
-                        cnhCategory: e.target.value.toUpperCase(),
-                      }))
-                    }
-                    placeholder="Categoria da CNH *"
-                    className={registrationInputClass}
-                  />
-                  <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-500">
-                    <CalendarDays
-                      size={18}
-                      className="shrink-0 text-slate-400"
-                    />
-                    <input
-                      type="date"
-                      value={driverForm.cnhExpiresAt}
-                      onChange={(e) =>
-                        setDriverForm((form) => ({
-                          ...form,
-                          cnhExpiresAt: e.target.value,
-                        }))
-                      }
-                      className="min-w-0 flex-1 bg-transparent outline-none"
-                      aria-label="Validade da CNH"
-                    />
-                  </label>
-                  <input
-                    value={driverForm.city}
-                    onChange={(e) =>
-                      setDriverForm((form) => ({
-                        ...form,
-                        city: e.target.value,
-                      }))
-                    }
-                    placeholder="Cidade *"
-                    className={registrationInputClass}
-                  />
-                  <input
-                    value={driverForm.state}
-                    onChange={(e) =>
-                      setDriverForm((form) => ({
-                        ...form,
-                        state: e.target.value.toUpperCase(),
-                      }))
-                    }
-                    placeholder="UF *"
-                    className={registrationInputClass}
-                  />
-                  <input
-                    value={driverForm.vehicleModel}
-                    onChange={(e) =>
-                      setDriverForm((form) => ({
-                        ...form,
-                        vehicleModel: e.target.value,
-                      }))
-                    }
-                    placeholder="Tipo / modelo do veículo *"
-                    className={registrationInputClass}
-                  />
-                  <input
-                    value={driverForm.vehicleYear}
-                    onChange={(e) =>
-                      setDriverForm((form) => ({
-                        ...form,
-                        vehicleYear: e.target.value
-                          .replace(/\D/g, "")
-                          .slice(0, 4),
-                      }))
-                    }
-                    placeholder="Ano do veículo *"
-                    inputMode="numeric"
-                    className={registrationInputClass}
-                  />
-                  <input
-                    value={driverForm.plate}
-                    onChange={(e) =>
-                      setDriverForm((form) => ({
-                        ...form,
-                        plate: e.target.value.toUpperCase(),
-                      }))
-                    }
-                    placeholder="Placa *"
-                    className={registrationInputClass}
-                  />
-                  <input
-                    value={driverForm.capacity}
-                    onChange={(e) =>
-                      setDriverForm((form) => ({
-                        ...form,
-                        capacity: e.target.value,
-                      }))
-                    }
-                    placeholder="Capacidade *"
-                    className={registrationInputClass}
-                  />
                   <input
                     value={driverForm.compartments}
                     onChange={(e) =>
@@ -640,19 +509,6 @@ function CarrierDashboard({
                     Este motorista será vinculado automaticamente à sua
                     transportadora.
                   </p>
-                  <label className="flex items-center gap-2 text-xs text-slate-600 sm:col-span-2">
-                    <input
-                      type="checkbox"
-                      checked={driverForm.locationSharingAuthorized}
-                      onChange={(e) =>
-                        setDriverForm((form) => ({
-                          ...form,
-                          locationSharingAuthorized: e.target.checked,
-                        }))
-                      }
-                    />
-                    Autorizo o compartilhamento da localização do motorista.
-                  </label>
                   <button
                     type="button"
                     onClick={() => void submitDriver()}
@@ -901,6 +757,11 @@ function RoleDashboard({
     "collection_point" | "final_customer"
   >("final_customer");
   const [locationAddress, setLocationAddress] = useState("");
+  const passwordResets = usePasswordResetRequests(
+    role === "admin" || role === "operator",
+  );
+  // Endereço pesquisado no Google Maps quando o geolocalizador não o encontra.
+  const [mapsLookupQuery, setMapsLookupQuery] = useState<string | null>(null);
   const [locationCompanyIds, setLocationCompanyIds] = useState<string[]>([]);
   const [accessLevel, setAccessLevel] = useState<AccessLevel>(
     role === "admin" ? "operador" : "cliente",
@@ -925,21 +786,9 @@ function RoleDashboard({
   const [driverForm, setDriverForm] = useState({
     full_name: "",
     email: "",
-    city: "",
-    state: "",
-    vehicle_model: "",
-    plate: "",
     phone: "",
-    capacity: "",
+    password: "",
     compartments: "",
-    notes: "",
-    cpf: "",
-    cnh: "",
-    cnh_category: "",
-    cnh_expires_at: "",
-    location_sharing_authorized: false,
-    employment_type: "autonomous" as "autonomous" | "carrier",
-    carrier_id: "",
   });
   const [registeredCompanies, setRegisteredCompanies] = useState(() =>
     loadList<{ id: string; name: string; cnpj: string; status: string }>(
@@ -1427,37 +1276,14 @@ function RoleDashboard({
         showFormError("Informe uma senha inicial com no mínimo 8 caracteres.");
         return;
       }
-      const publicDriverRequest = role === "driver" && !pendingUser.company_id;
-      const requiredPublicDriverFields = fields
-        ? [
-            fields.full_name,
-            fields.phone,
-            fields.cpf,
-            fields.cnh,
-            fields.cnh_category,
-            fields.cnh_expires_at,
-            fields.vehicle_model,
-            fields.plate,
-            fields.vehicle_year,
-            fields.city,
-            fields.state,
-            fields.capacity,
-            fields.compartments,
-          ]
-        : [];
       if (
         role === "driver" &&
-        (!fields ||
-          (publicDriverRequest
-            ? requiredPublicDriverFields.some(
-                (value) => !String(value ?? "").trim(),
-              )
-            : !fields.full_name.trim() || !fields.phone.trim()))
+        (!fields?.full_name.trim() ||
+          !fields.phone.trim() ||
+          !fields.compartments.trim())
       ) {
         showFormError(
-          publicDriverRequest
-            ? "Preencha todos os dados pessoais, CNH e veículo do motorista antes de aprovar."
-            : "Preencha nome e telefone do motorista antes de aprovar. O veículo é opcional.",
+          "Preencha nome, telefone e compartimentação do motorista antes de aprovar.",
         );
         return;
       }
@@ -1478,18 +1304,7 @@ function RoleDashboard({
               ? {
                   fullName: fields.full_name,
                   phone: fields.phone,
-                  vehicleModel: fields.vehicle_model,
-                  plate: fields.plate,
-                  city: fields.city,
-                  state: fields.state,
-                  capacity: fields.capacity,
                   compartments: fields.compartments,
-                  cpf: fields.cpf,
-                  cnh: fields.cnh,
-                  cnhCategory: fields.cnh_category,
-                  cnhExpiresAt: fields.cnh_expires_at,
-                  vehicleYear: fields.vehicle_year,
-                  locationSharingAuthorized: fields.location_sharing_authorized,
                 }
               : undefined,
           }),
@@ -1828,17 +1643,25 @@ function RoleDashboard({
       }>;
       const requestedCity = normalizeGeocodeText(city);
       const requestedNumber = address.match(/\b\d+[a-zA-Z]?\b/)?.[0] ?? "";
-      const addressWords = normalizeGeocodeText(address)
+      // Usa só o nome da via (antes da primeira vírgula), sem número/bairro.
+      const addressWords = normalizeGeocodeText(address.split(",")[0] ?? "")
         .split(/[^a-z0-9]+/)
-        .filter((word) => word.length >= 4 && !/^\d+$/.test(word));
+        .filter(
+          (word) =>
+            word.length >= 4 &&
+            !/^\d+$/.test(word) &&
+            !genericAddressWords.has(word),
+        );
       const locationMatches = (
         resultCity: string,
         resultState: string | undefined,
       ) => {
+        const normalizedResultCity = normalizeGeocodeText(resultCity);
         const cityMatch =
-          normalizeGeocodeText(resultCity) === requestedCity ||
-          normalizeGeocodeText(resultCity).includes(requestedCity) ||
-          requestedCity.includes(normalizeGeocodeText(resultCity));
+          normalizedResultCity.length > 0 &&
+          (normalizedResultCity === requestedCity ||
+            normalizedResultCity.includes(requestedCity) ||
+            requestedCity.includes(normalizedResultCity));
         const stateMatch =
           resultState === normalizedState ||
           normalizeGeocodeText(resultState ?? "") ===
@@ -1910,21 +1733,26 @@ function RoleDashboard({
           };
         }>;
       };
+      const countMatchedWords = (
+        properties: NonNullable<(typeof photonBody.features)>[number]["properties"],
+      ) => {
+        const matchedStreet = normalizeGeocodeText(
+          `${properties?.name ?? ""} ${properties?.street ?? ""}`,
+        );
+        return addressWords.filter((word) => matchedStreet.includes(word))
+          .length;
+      };
       const photonMatch = (photonBody.features ?? []).find((feature) => {
         const properties = feature.properties;
         if (!properties || properties.countrycode?.toUpperCase() !== "BR")
           return false;
         const resultCity = properties.city ?? properties.district ?? "";
         if (!locationMatches(resultCity, properties.state)) return false;
-        const matchedStreet = normalizeGeocodeText(
-          `${properties.name ?? ""} ${properties.street ?? ""}`,
-        );
-        const matchedStreetWords = addressWords.filter((word) =>
-          matchedStreet.includes(word),
-        ).length;
+        // Em cidades pequenas a via costuma faltar no OSM; aceita o local
+        // quando ao menos metade das palavras específicas do endereço bate.
         return (
           addressWords.length > 0 &&
-          matchedStreetWords >= Math.min(2, addressWords.length)
+          countMatchedWords(properties) >= Math.ceil(addressWords.length / 2)
         );
       });
       const photonCoordinates = photonMatch?.geometry?.coordinates;
@@ -1939,8 +1767,9 @@ function RoleDashboard({
         latitude: photonCoordinates[1],
         longitude: photonCoordinates[0],
         approximate:
-          Boolean(requestedNumber) &&
-          photonMatch.properties?.housenumber !== requestedNumber,
+          countMatchedWords(photonMatch.properties) < addressWords.length ||
+          (Boolean(requestedNumber) &&
+            photonMatch.properties?.housenumber !== requestedNumber),
         matchedAddress: `${photonMatch.properties?.name ?? address}, ${city}, ${stateName}`,
       };
     } catch {
@@ -1948,7 +1777,10 @@ function RoleDashboard({
     }
   };
 
-  const handleAdd = async (requestedAccessLevel: AccessLevel = accessLevel) => {
+  const handleAdd = async (
+    requestedAccessLevel: AccessLevel = accessLevel,
+    manualPoint?: MapPoint,
+  ) => {
     if (!name.trim() || !email.trim()) {
       showFormError("Preencha nome e e-mail antes de salvar o cadastro.");
       return;
@@ -2011,21 +1843,42 @@ function RoleDashboard({
         return;
       }
 
-      const coordinates = await geocodeAddress(
-        addressText,
-        cityText,
-        locationState,
-      );
-      if (!coordinates) {
-        showFormError(
-          "Não foi possível localizar esse endereço na cidade e UF informadas. Confira rua, número, cidade e UF.",
-        );
-        return;
-      }
-
       const editingLocation = clients.find(
         (client) => client.id === editingContactId,
       );
+      // Na edição sem mudança de endereço, mantém o GPS já salvo (que pode ter
+      // sido marcado manualmente pelo Google Maps).
+      const keepsSavedPoint =
+        editingLocation?.latitude != null &&
+        editingLocation.longitude != null &&
+        (editingLocation.address ?? "").trim() === addressText &&
+        (editingLocation.city ?? editingLocation.region ?? "").trim() ===
+          cityText &&
+        (editingLocation.state ?? "").trim().toUpperCase() === stateText;
+
+      const manualCoordinates = Boolean(manualPoint);
+      let coordinates: Awaited<ReturnType<typeof geocodeAddress>> = null;
+      if (manualPoint) {
+        coordinates = {
+          ...manualPoint,
+          approximate: false,
+          matchedAddress: addressText,
+        };
+      } else if (keepsSavedPoint) {
+        coordinates = {
+          latitude: editingLocation.latitude!,
+          longitude: editingLocation.longitude!,
+          approximate: false,
+          matchedAddress: addressText,
+        };
+      } else {
+        coordinates = await geocodeAddress(addressText, cityText, stateText);
+        if (!coordinates) {
+          // Não achou: abre a pesquisa no Google Maps para coletar o link.
+          setMapsLookupQuery(`${addressText}, ${cityText} - ${stateText}`);
+          return;
+        }
+      }
       const isPersistedLocation = Boolean(
         editingLocation?.kind &&
         !editingLocation.id.startsWith("client-demo-") &&
@@ -2123,10 +1976,14 @@ function RoleDashboard({
       setEditingContactId(null);
       setFormSuccess(
         coordinates.approximate
-          ? `GPS aproximado ao trecho da via (${coordinates.matchedAddress}); o número exato não foi localizado.`
-          : isPersistedLocation
-            ? "Endereço atualizado com GPS confirmado."
-            : "Cadastro criado com GPS confirmado.",
+          ? `GPS aproximado (local encontrado: ${coordinates.matchedAddress}); o endereço exato não foi localizado. Confira o ponto no mapa.`
+          : manualCoordinates
+            ? isPersistedLocation
+              ? "Endereço atualizado com o GPS informado."
+              : "Cadastro criado com o GPS informado."
+            : isPersistedLocation
+              ? "Endereço atualizado com GPS confirmado."
+              : "Cadastro criado com GPS confirmado.",
       );
       return;
     }
@@ -2200,22 +2057,9 @@ function RoleDashboard({
     setDriverForm({
       full_name: driver.full_name,
       email: driver.email ?? "",
-      city: driver.city ?? "",
-      state: driver.state ?? "",
-      vehicle_model: driver.vehicle_model ?? "",
-      plate: driver.plate ?? "",
       phone: driver.phone ?? "",
-      capacity: driver.capacity ?? "",
+      password: "",
       compartments: driver.compartments ?? "",
-      notes: driver.notes ?? "",
-      cpf: driver.cpf ?? "",
-      cnh: driver.cnh ?? "",
-      cnh_category: driver.cnh_category ?? "",
-      cnh_expires_at: driver.cnh_expires_at?.slice(0, 10) ?? "",
-      location_sharing_authorized: driver.location_sharing_authorized ?? false,
-      employment_type:
-        driver.employment_type === "carrier" ? "carrier" : "autonomous",
-      carrier_id: driver.carrier?.id ?? "",
     });
     setTab("cadastros");
   };
@@ -2236,134 +2080,68 @@ function RoleDashboard({
     );
   };
 
-  const handleAddDriver = () => {
-    const requiredDriverFields = [
-      driverForm.full_name,
-      driverForm.city,
-      driverForm.state,
-      driverForm.phone,
-    ];
-    if (requiredDriverFields.some((field) => !field.trim())) {
-      setDriverFormError("Preencha todos os campos obrigatórios do motorista.");
-      showFormError("Preencha todos os campos obrigatórios do motorista.");
-      return;
-    }
-    if (driverForm.employment_type === "carrier" && !driverForm.carrier_id) {
-      setDriverFormError("Selecione a transportadora do motorista.");
-      showFormError("Selecione a transportadora do motorista.");
-      return;
-    }
+  const handleAddDriver = async () => {
+    const fullName = driverForm.full_name.trim();
+    const email = driverForm.email.trim();
+    const phone = driverForm.phone.trim();
+    const compartments = driverForm.compartments.trim();
+    const fail = (message: string) => {
+      setDriverFormError(message);
+      showFormError(message);
+    };
+    if (!fullName || !email || !phone || !compartments)
+      return fail("Informe nome, telefone, e-mail e compartimentação.");
+    if (!editingDriverId && driverForm.password.length < 6)
+      return fail("Informe uma senha com no mínimo 6 caracteres.");
     setDriverFormError("");
 
-    const newDriver: DemoDriver = {
-      id: `driver-${Date.now()}`,
-      full_name: driverForm.full_name.trim(),
-      email: driverForm.email.trim() || null,
-      city: driverForm.city,
-      state: driverForm.state,
-      vehicle_model: driverForm.vehicle_model.trim(),
-      plate: driverForm.plate.trim(),
-      phone: driverForm.phone.trim(),
-      capacity: driverForm.capacity.trim(),
-      compartments: driverForm.compartments.trim(),
-      notes: "",
-      availability_since: new Date().toISOString(),
-      is_online: true,
-      rating: 4.8,
-      status: "available",
-      latitude: null,
-      longitude: null,
-      cpf: driverForm.cpf.trim() || null,
-      cnh: driverForm.cnh.trim() || null,
-      cnh_category: driverForm.cnh_category.trim() || null,
-      cnh_expires_at: driverForm.cnh_expires_at || null,
-      location_sharing_authorized: driverForm.location_sharing_authorized,
-      employment_type: driverForm.employment_type,
-      carrier_id: driverForm.carrier_id,
-      homologation_status: "in_analysis",
-      current_vehicle: null,
-      carrier: null,
-    };
+    const token = localStorage.getItem("acneto-access-token");
+    const response = await apiFetch(
+      editingDriverId
+        ? `/api/admin/drivers/${editingDriverId}`
+        : "/api/admin/drivers",
+      {
+        method: editingDriverId ? "PATCH" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token ?? ""}`,
+        },
+        body: JSON.stringify({
+          fullName,
+          email,
+          phone,
+          compartments,
+          ...(editingDriverId ? {} : { password: driverForm.password }),
+        }),
+      },
+    ).catch(() => null);
+    const body = response
+      ? ((await response.json().catch(() => ({}))) as {
+          driver?: DemoDriver;
+          error?: string;
+        })
+      : {};
+    if (!response?.ok)
+      return fail(body.error ?? "Não foi possível salvar o motorista.");
 
     if (editingDriverId) {
-      const token = localStorage.getItem("acneto-access-token");
-      if (token) {
-        void apiFetch(`/api/admin/drivers/${editingDriverId}`, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            fullName: newDriver.full_name,
-            email: newDriver.email,
-            city: newDriver.city,
-            state: newDriver.state,
-            vehicleModel: newDriver.vehicle_model,
-            plate: newDriver.plate,
-            phone: newDriver.phone,
-            capacity: newDriver.capacity,
-            compartments: newDriver.compartments,
-            notes: newDriver.notes,
-            cpf: newDriver.cpf,
-            cnh: newDriver.cnh,
-            cnhCategory: newDriver.cnh_category,
-            cnhExpiresAt: newDriver.cnh_expires_at,
-            locationSharingAuthorized: newDriver.location_sharing_authorized,
-            employmentType: newDriver.employment_type,
-            carrierId: newDriver.carrier_id,
-          }),
-        });
-      }
-      setDrivers((prev) =>
-        prev.map((item) =>
-          item.id === editingDriverId
-            ? {
-                ...item,
-                full_name: newDriver.full_name,
-                email: newDriver.email,
-                city: newDriver.city,
-                state: newDriver.state,
-                vehicle_model: newDriver.vehicle_model,
-                plate: newDriver.plate,
-                phone: newDriver.phone,
-                capacity: newDriver.capacity,
-                compartments: newDriver.compartments,
-                notes: newDriver.notes,
-                cpf: newDriver.cpf,
-                cnh: newDriver.cnh,
-                cnh_category: newDriver.cnh_category,
-                cnh_expires_at: newDriver.cnh_expires_at,
-                location_sharing_authorized:
-                  newDriver.location_sharing_authorized,
-                employment_type: newDriver.employment_type,
-                carrier_id: newDriver.carrier_id,
-              }
-            : item,
-        ),
-      );
+      const applyEdit = (item: DemoDriver) =>
+        item.id === editingDriverId
+          ? { ...item, full_name: fullName, email, phone, compartments }
+          : item;
+      setDrivers((prev) => prev.map(applyEdit));
+      setDirectoryDrivers((prev) => prev.map(applyEdit));
       setEditingDriverId(null);
-    } else {
-      setDrivers((prev) => [newDriver, ...prev]);
+    } else if (body.driver) {
+      setDrivers((prev) => [body.driver!, ...prev]);
+      setDirectoryDrivers((prev) => [body.driver!, ...prev]);
     }
     setDriverForm({
       full_name: "",
       email: "",
-      city: "",
-      state: "",
-      vehicle_model: "",
-      plate: "",
       phone: "",
-      capacity: "",
+      password: "",
       compartments: "",
-      notes: "",
-      cpf: "",
-      cnh: "",
-      cnh_category: "",
-      cnh_expires_at: "",
-      location_sharing_authorized: false,
-      employment_type: "autonomous",
-      carrier_id: "",
     });
   };
 
@@ -2400,6 +2178,15 @@ function RoleDashboard({
 
   return (
     <div className="min-h-screen bg-[#f5f7fa] p-4 sm:p-6">
+      <DriverChatAlerts />
+      <MapsLocationLookupModal
+        query={mapsLookupQuery}
+        onCancel={() => setMapsLookupQuery(null)}
+        onConfirm={(point) => {
+          setMapsLookupQuery(null);
+          void handleAdd("cliente", point);
+        }}
+      />
       <ConfirmationModal
         open={Boolean(formError)}
         title="Revise os dados"
@@ -2551,9 +2338,9 @@ function RoleDashboard({
               }`}
             >
               <span>{role === "admin" ? "Solicitações" : "Aprovações"}</span>
-              {pendingUsers.length > 0 && (
+              {pendingUsers.length + passwordResets.requests.length > 0 && (
                 <span className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                  {pendingUsers.length}
+                  {pendingUsers.length + passwordResets.requests.length}
                 </span>
               )}
             </button>
@@ -2837,8 +2624,19 @@ function RoleDashboard({
                             full_name: e.target.value,
                           }))
                         }
-                        placeholder="Nome do motorista"
-                        required
+                        placeholder="Nome do motorista *"
+                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                      />
+                      <input
+                        type="tel"
+                        value={driverForm.phone}
+                        onChange={(e) =>
+                          setDriverForm((prev) => ({
+                            ...prev,
+                            phone: e.target.value,
+                          }))
+                        }
+                        placeholder="Telefone / WhatsApp *"
                         className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                       />
                       <input
@@ -2850,170 +2648,24 @@ function RoleDashboard({
                             email: e.target.value,
                           }))
                         }
-                        placeholder="E-mail do cadastro"
+                        placeholder="E-mail *"
                         className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                       />
-                      <input
-                        value={driverForm.cpf}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            cpf: e.target.value,
-                          }))
-                        }
-                        placeholder="CPF"
-                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      />
-                      <input
-                        value={driverForm.cnh}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            cnh: e.target.value,
-                          }))
-                        }
-                        placeholder="CNH"
-                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      />
-                      <input
-                        value={driverForm.cnh_category}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            cnh_category: e.target.value.toUpperCase(),
-                          }))
-                        }
-                        placeholder="Categoria da CNH"
-                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      />
-                      <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-600">
-                        <span className="text-xs font-semibold">
-                          Validade da CNH
-                        </span>
+                      {!editingDriverId && (
                         <input
-                          type="date"
-                          value={driverForm.cnh_expires_at}
+                          type="password"
+                          value={driverForm.password}
                           onChange={(e) =>
                             setDriverForm((prev) => ({
                               ...prev,
-                              cnh_expires_at: e.target.value,
+                              password: e.target.value,
                             }))
                           }
-                          className="min-w-0 flex-1 bg-transparent outline-none"
+                          placeholder="Senha de acesso *"
+                          autoComplete="new-password"
+                          className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                         />
-                      </label>
-                      <input
-                        value={driverForm.vehicle_model}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            vehicle_model: e.target.value,
-                          }))
-                        }
-                        placeholder="Veículo"
-                        required
-                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      />
-                      <input
-                        value={driverForm.city}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            city: e.target.value,
-                          }))
-                        }
-                        placeholder="Cidade"
-                        required
-                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      />
-                      <input
-                        value={driverForm.state}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            state: e.target.value,
-                          }))
-                        }
-                        placeholder="UF"
-                        required
-                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      />
-                      <select
-                        value={driverForm.employment_type}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            employment_type: e.target.value as
-                              | "autonomous"
-                              | "carrier",
-                            carrier_id:
-                              e.target.value === "autonomous"
-                                ? ""
-                                : prev.carrier_id,
-                          }))
-                        }
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      >
-                        <option value="autonomous">Autônomo</option>
-                        <option value="carrier">
-                          Motorista de transportadora
-                        </option>
-                      </select>
-                      {driverForm.employment_type === "carrier" && (
-                        <select
-                          value={driverForm.carrier_id}
-                          onChange={(e) =>
-                            setDriverForm((prev) => ({
-                              ...prev,
-                              carrier_id: e.target.value,
-                            }))
-                          }
-                          className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                        >
-                          <option value="">Selecione a transportadora *</option>
-                          {registeredCompanies.map((company) => (
-                            <option key={company.id} value={company.id}>
-                              {company.name} · {company.cnpj}
-                            </option>
-                          ))}
-                        </select>
                       )}
-                      <input
-                        value={driverForm.plate}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            plate: e.target.value,
-                          }))
-                        }
-                        placeholder="Placa"
-                        required
-                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
-                      />
-                      <input
-                        value={driverForm.phone}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            phone: e.target.value,
-                          }))
-                        }
-                        placeholder="Telefone"
-                        required
-                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      />
-                      <input
-                        value={driverForm.capacity}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            capacity: e.target.value,
-                          }))
-                        }
-                        placeholder="Capacidade (ex.: 30.000 L)"
-                        required
-                        className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      />
                       <input
                         value={driverForm.compartments}
                         onChange={(e) =>
@@ -3022,35 +2674,9 @@ function RoleDashboard({
                             compartments: e.target.value,
                           }))
                         }
-                        placeholder="Compartimentação"
-                        required
+                        placeholder="Compartimentação *"
                         className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                       />
-                      <textarea
-                        value={driverForm.notes}
-                        onChange={(e) =>
-                          setDriverForm((prev) => ({
-                            ...prev,
-                            notes: e.target.value,
-                          }))
-                        }
-                        placeholder="Observações sobre manutenção, documentos ou liberação"
-                        rows={2}
-                        className="resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
-                      />
-                      <label className="flex items-center gap-2 text-sm text-slate-600 sm:col-span-2">
-                        <input
-                          type="checkbox"
-                          checked={driverForm.location_sharing_authorized}
-                          onChange={(e) =>
-                            setDriverForm((prev) => ({
-                              ...prev,
-                              location_sharing_authorized: e.target.checked,
-                            }))
-                          }
-                        />
-                        Autoriza o compartilhamento da localização
-                      </label>
                       <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5 text-xs text-blue-800 sm:col-span-2">
                         <Link2 size={15} />
                         <span>
@@ -3171,7 +2797,7 @@ function RoleDashboard({
                           <input
                             value={locationAddress}
                             onChange={(e) => setLocationAddress(e.target.value)}
-                            placeholder="Endereço completo do ponto"
+                            placeholder="Rua/Av., número e bairro"
                             className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 sm:col-span-2"
                           />
                           <div className="space-y-2 rounded-xl border border-blue-100 bg-blue-50/60 p-3 sm:col-span-2">
@@ -3341,6 +2967,10 @@ function RoleDashboard({
           <SupportTicketsAdmin isSuperAdmin={isSuperAdmin} />
         ) : tab === "solicitacoes" ? (
           <div className="space-y-5">
+            <PasswordResetRequestsPanel
+              requests={passwordResets.requests}
+              onChanged={() => void passwordResets.reload()}
+            />
             <PendingVehiclesPanel
               vehicles={pendingVehicles}
               onDecision={async (vehicleId, status) => {
@@ -4100,8 +3730,8 @@ function LocationMapView({
         <div className="relative h-[420px] overflow-hidden rounded-2xl border border-slate-200">
           <MapContainer
             className="h-full w-full"
-            center={mapPoints[0] ?? [-15.7939, -47.8828]}
-            zoom={mapPoints.length > 0 ? 12 : 4}
+            center={mapPoints[0] ?? [-14.235, -51.9253]}
+            zoom={4}
             scrollWheelZoom
             zoomControl
           >
@@ -4487,6 +4117,7 @@ function MapViewport({
 }) {
   const map = useMap();
   const hasFitted = useRef(false);
+  const hasInitializedDriverSelection = useRef(false);
   const previousSelectedId = useRef<string | null>(null);
   const previousDriverFocusVersion = useRef(0);
   const previousFocusedClientId = useRef<string | null>(null);
@@ -4534,6 +4165,12 @@ function MapViewport({
       selectedDriver &&
       Number.isFinite(selectedDriver.latitude) &&
       Number.isFinite(selectedDriver.longitude);
+    if (!hasInitializedDriverSelection.current && selectedDriver) {
+      hasInitializedDriverSelection.current = true;
+      previousSelectedId.current = selectedDriver.id;
+      previousDriverFocusVersion.current = driverFocusVersion;
+      return;
+    }
     const shouldFocus =
       hasLocation &&
       (previousSelectedId.current !== selectedDriver.id ||

@@ -1,4 +1,4 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 import express from "express";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -249,8 +249,8 @@ const decodeToken = (token) => {
   return payload.exp > Date.now() ? payload : null;
 };
 
-const broadcast = (type, recipientUserId = null) => {
-  const payload = `data: ${JSON.stringify({ type, at: Date.now() })}\n\n`;
+const broadcast = (type, recipientUserId = null, data = undefined) => {
+  const payload = `data: ${JSON.stringify({ type, at: Date.now(), ...(data ? { data } : {}) })}\n\n`;
   for (const [client, userId] of eventClients) {
     if (recipientUserId && recipientUserId !== userId) continue;
     if (client.destroyed || client.writableEnded) {
@@ -559,7 +559,7 @@ app.post("/api/auth/signup", async (request, response) => {
     "image/png",
     "image/webp",
   ]);
-  if (["driver", "carrier"].includes(requestedRole) && attachments.length === 0)
+  if (requestedRole === "carrier" && attachments.length === 0)
     return response
       .status(400)
       .json({ error: "Anexe ao menos um documento para continuar" });
@@ -638,12 +638,15 @@ app.post("/api/auth/signup", async (request, response) => {
           ? "Nome do sócio representante, e-mail, telefone e senha válida são obrigatórios"
           : "Nome, e-mail, telefone e senha válida são obrigatórios",
     });
+  const signupPhoneError = await phoneUniquenessError(phone);
+  if (signupPhoneError)
+    return response.status(409).json({ error: signupPhoneError });
   if (!emailPattern.test(email))
     return response.status(400).json({
       error: "Informe um e-mail válido e existente para o cadastro",
     });
   const birthDate = normalizeBirthDate(request.body?.birthDate);
-  if (!birthDate)
+  if (!birthDate && requestedRole !== "driver")
     return response
       .status(400)
       .json({ error: "Informe uma data de nascimento válida" });
@@ -659,27 +662,12 @@ app.post("/api/auth/signup", async (request, response) => {
     });
   if (
     requestedRole === "driver" &&
-    [
-      driverData.cpf,
-      driverData.cnh,
-      driverData.cnhCategory,
-      driverData.cnhExpiresAt,
-      driverData.city,
-      driverData.state,
-      driverData.vehicleModel,
-      driverData.vehicleYear,
-      driverData.plate,
-      driverData.capacity,
-      driverData.compartments,
-    ].some(
-      (value) =>
-        value === undefined || value === null || String(value).trim() === "",
-    )
+    (typeof driverData.compartments !== "string" ||
+      !driverData.compartments.trim())
   )
-    return response.status(400).json({
-      error:
-        "CPF, CNH, categoria, validade, cidade, UF e veículo completo são obrigatórios para motorista",
-    });
+    return response
+      .status(400)
+      .json({ error: "Informe a compartimentação do veículo" });
   if (requestedRole === "driver" && employmentType === "carrier" && !carrierId)
     return response
       .status(400)
@@ -837,91 +825,159 @@ app.patch("/api/account/birth-date", auth, async (request, response) => {
   response.json({ birth_date: birthDate });
 });
 
-app.post("/api/auth/password-reset/request", async (request, response) => {
+// Telefone só com DDD + número (sem +55, zeros ou formatação), para comparar
+// números salvos em formatos diferentes: "(85) 98709-0983" = "+55 85987090983".
+const comparablePhone = (value) => {
+  let digits = String(value ?? "").replace(/\D/g, "").replace(/^0+/, "");
+  if (digits.startsWith("55") && digits.length >= 12) digits = digits.slice(2);
+  return digits.length >= 10 ? digits : null;
+};
+
+// Busca a conta pelo celular cadastrado. O telefone não é único no banco: se
+// houver mais de uma conta com o número, o e-mail é usado para desempatar.
+const findUserByPhone = async (phoneInput, emailInput) => {
+  const target = comparablePhone(phoneInput);
+  if (!target) return { user: null, ambiguous: false };
   const email =
-    typeof request.body?.email === "string"
-      ? request.body.email.trim().toLowerCase()
-      : "";
-  const document = normalizeDocument(request.body?.document);
-  const birthDate = normalizeBirthDate(request.body?.birthDate);
-  if (!emailPattern.test(email) || !document || !birthDate)
-    return response.status(400).json({
-      error:
-        "Informe e-mail, número do documento (CPF ou CNPJ) e data de nascimento válidos",
-    });
+    typeof emailInput === "string" ? emailInput.trim().toLowerCase() : "";
+  const candidates = await prisma.user.findMany({
+    where: { phone: { not: null } },
+    select: { id: true, phone: true, email: true },
+  });
+  let matches = candidates.filter(
+    (candidate) => comparablePhone(candidate.phone) === target,
+  );
+  if (matches.length > 1 && email)
+    matches = matches.filter((candidate) => candidate.email === email);
+  return {
+    user: matches.length === 1 ? matches[0] : null,
+    ambiguous: matches.length > 1,
+  };
+};
+
+// Telefone único no sistema: contas, motoristas, transportadoras/clientes e
+// pontos operacionais. Registros do mesmo dono (a conta, o cadastro de
+// motorista e a transportadora dela) podem repetir o próprio número.
+const findPhoneConflict = async (phoneInput, owner = {}) => {
+  const target = comparablePhone(phoneInput);
+  if (!target) return null;
+  const same = (value) => comparablePhone(value) === target;
+  const ownedByUser = (userId) => Boolean(owner.userId) && userId === owner.userId;
+  const [users, drivers, companies, locations] = await Promise.all([
+    prisma.user.findMany({
+      where: { phone: { not: null } },
+      select: { id: true, phone: true },
+    }),
+    prisma.driver.findMany({
+      where: { phone: { not: null } },
+      select: { id: true, userId: true, phone: true },
+    }),
+    prisma.transportCompany.findMany({
+      select: { id: true, userId: true, phone: true },
+    }),
+    prisma.operationalLocation.findMany({
+      where: { phone: { not: null }, active: true },
+      select: { id: true, phone: true },
+    }),
+  ]);
+  if (users.some((user) => user.id !== owner.userId && same(user.phone)))
+    return "outra conta";
+  if (
+    drivers.some(
+      (driver) =>
+        driver.id !== owner.driverId &&
+        !ownedByUser(driver.userId) &&
+        same(driver.phone),
+    )
+  )
+    return "outro motorista";
+  if (
+    companies.some(
+      (company) =>
+        company.id !== owner.companyId &&
+        !ownedByUser(company.userId) &&
+        same(company.phone),
+    )
+  )
+    return "outra empresa";
+  if (
+    locations.some(
+      (location) => location.id !== owner.locationId && same(location.phone),
+    )
+  )
+    return "um cliente ou posto de coleta";
+  return null;
+};
+
+// Retorna a mensagem de erro, ou null se o número pode ser usado. Na edição,
+// passe o telefone atual: se não mudou, não valida (evita travar cadastros
+// antigos que já estavam duplicados).
+const phoneUniquenessError = async (phone, owner = {}, currentPhone) => {
+  if (!comparablePhone(phone)) return null;
+  if (
+    currentPhone !== undefined &&
+    comparablePhone(currentPhone) === comparablePhone(phone)
+  )
+    return null;
+  const conflict = await findPhoneConflict(phone, owner);
+  return conflict
+    ? `Este telefone já está cadastrado em ${conflict}. Cada cadastro precisa de um número próprio.`
+    : null;
+};
+
+// "Esqueci minha senha": registra o pedido para admins/operadores, que
+// redefinem a senha e a enviam ao usuário pelo WhatsApp.
+app.post("/api/auth/password-reset/request", async (request, response) => {
+  const phone =
+    typeof request.body?.phone === "string"
+      ? comparablePhone(request.body.phone)
+      : null;
+  if (!phone)
+    return response
+      .status(400)
+      .json({ error: "Informe o celular cadastrado com DDD" });
   const clientIp = request.get("fly-client-ip") || request.ip;
   if (
-    resetRequestLimited(`email:${email}`, 5) ||
+    resetRequestLimited(`phone:${phone}`, 5) ||
     resetRequestLimited(`ip:${clientIp}`, 20)
   )
     return response.status(429).json({
       error: "Muitas tentativas. Aguarde alguns minutos e tente novamente.",
     });
 
-  const user = await prisma.user.findUnique({
-    where: { email },
-    include: {
-      driver: { select: { cpf: true } },
-      transportCompany: { select: { cnpj: true } },
-    },
-  });
-  // Motorista confirma com o CPF; transportadora/cliente com o CNPJ. Resposta única para qualquer falha.
-  const storedDocument = normalizeDocument(
-    user?.driver?.cpf ?? user?.transportCompany?.cnpj,
+  const { user, ambiguous } = await findUserByPhone(
+    phone,
+    request.body?.email,
   );
-  const confirmed =
-    Boolean(user?.birthDate) &&
-    Boolean(storedDocument) &&
-    sameSecret(storedDocument, document) &&
-    sameSecret(user.birthDate, birthDate);
-  if (!confirmed)
-    return response.status(403).json({
+  if (ambiguous)
+    return response.status(409).json({
+      needs_email: true,
       error:
-        "Os dados informados não conferem. Se o problema continuar, peça ao administrador para redefinir sua senha.",
+        "Este celular está em mais de uma conta. Informe também o e-mail da conta.",
+    });
+  if (!user)
+    return response.status(404).json({
+      error:
+        "Não encontramos uma conta com esse celular. Confira o número ou fale com a operação.",
     });
 
-  const rawToken = crypto.randomBytes(32).toString("base64url");
-  await prisma.passwordResetToken.deleteMany({
-    where: { userId: user.id, usedAt: null },
+  // Um pedido pendente por conta; um novo pedido só renova a data.
+  const pending = await prisma.passwordResetRequest.findFirst({
+    where: { userId: user.id, status: "pending" },
   });
-  await prisma.passwordResetToken.create({
-    data: {
-      userId: user.id,
-      tokenHash: hashResetToken(rawToken),
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-    },
-  });
-  response.json({ reset_token: rawToken });
-});
-
-app.post("/api/auth/password-reset/confirm", async (request, response) => {
-  const token =
-    typeof request.body?.token === "string" ? request.body.token : "";
-  const password =
-    typeof request.body?.password === "string" ? request.body.password : "";
-  if (!token || password.length < 6)
-    return response
-      .status(400)
-      .json({ error: "Token e senha válida são obrigatórios" });
-
-  const reset = await prisma.passwordResetToken.findUnique({
-    where: { tokenHash: hashResetToken(token) },
-  });
-  if (!reset || reset.usedAt || reset.expiresAt <= new Date())
-    return response
-      .status(400)
-      .json({ error: "Código de recuperação inválido ou expirado" });
-
-  const passwordHash = await hashPassword(password);
-  await prisma.$transaction([
-    prisma.user.update({ where: { id: reset.userId }, data: { passwordHash } }),
-    prisma.passwordResetToken.update({
-      where: { id: reset.id },
-      data: { usedAt: new Date() },
-    }),
-  ]);
+  if (pending)
+    await prisma.passwordResetRequest.update({
+      where: { id: pending.id },
+      data: { createdAt: new Date(), phone: user.phone },
+    });
+  else
+    await prisma.passwordResetRequest.create({
+      data: { userId: user.id, phone: user.phone },
+    });
+  broadcast("password-reset-requested");
   response.json({
-    message: "Senha redefinida com segurança. Faça login novamente.",
+    message:
+      "Pedido enviado. Um administrador vai redefinir sua senha e enviá-la pelo WhatsApp do celular cadastrado.",
   });
 });
 
@@ -945,6 +1001,124 @@ const requireSuperAdmin = (request, response, next) => {
     .status(403)
     .json({ error: "Acesso restrito ao superadministrador" });
 };
+
+// Operador não redefine senha de administradores nem de outros operadores.
+const canResetPasswordOf = (request, targetRole) =>
+  request.user.profile?.role === "admin" ||
+  !["admin", "operator"].includes(targetRole);
+
+const temporaryPassword = () => {
+  // Sem caracteres ambíguos (0/O, 1/l/I) para facilitar a digitação.
+  const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  return Array.from(
+    { length: 10 },
+    () => alphabet[crypto.randomInt(0, alphabet.length)],
+  ).join("");
+};
+
+app.get(
+  "/api/admin/password-reset-requests",
+  auth,
+  requireOperations,
+  async (request, response) => {
+    const requests = await prisma.passwordResetRequest.findMany({
+      where: { status: "pending" },
+      include: { user: { include: { profile: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+    response.json({
+      requests: requests
+        .filter((item) => canResetPasswordOf(request, item.user.profile?.role))
+        .map((item) => ({
+          id: item.id,
+          user_id: item.userId,
+          full_name: item.user.fullName,
+          email: item.user.email,
+          phone: item.user.phone ?? item.phone,
+          role: item.user.profile?.role ?? null,
+          created_at: item.createdAt.toISOString(),
+        })),
+    });
+  },
+);
+
+app.post(
+  "/api/admin/password-reset-requests/:requestId/resolve",
+  auth,
+  requireOperations,
+  async (request, response) => {
+    const resetRequest = await prisma.passwordResetRequest.findUnique({
+      where: { id: request.params.requestId },
+      include: { user: { include: { profile: true } } },
+    });
+    if (!resetRequest || resetRequest.status !== "pending")
+      return response
+        .status(404)
+        .json({ error: "Solicitação não encontrada ou já atendida" });
+    if (!canResetPasswordOf(request, resetRequest.user.profile?.role))
+      return response.status(403).json({
+        error:
+          "Somente administradores redefinem senhas de operadores e administradores",
+      });
+
+    const password = temporaryPassword();
+    const passwordHash = await hashPassword(password);
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: resetRequest.userId },
+        data: { passwordHash },
+      }),
+      // Ao entrar com a senha temporária, o usuário é obrigado a criar outra.
+      prisma.profile.update({
+        where: { userId: resetRequest.userId },
+        data: { mustChangePassword: true },
+      }),
+      prisma.passwordResetRequest.update({
+        where: { id: resetRequest.id },
+        data: {
+          status: "resolved",
+          resolvedAt: new Date(),
+          resolvedByUserId: request.user.id,
+        },
+      }),
+    ]);
+    broadcast("password-reset-resolved");
+    response.json({
+      temporary_password: password,
+      full_name: resetRequest.user.fullName,
+      email: resetRequest.user.email,
+      phone: resetRequest.user.phone ?? resetRequest.phone,
+    });
+  },
+);
+
+app.post(
+  "/api/admin/password-reset-requests/:requestId/dismiss",
+  auth,
+  requireOperations,
+  async (request, response) => {
+    const resetRequest = await prisma.passwordResetRequest.findUnique({
+      where: { id: request.params.requestId },
+      include: { user: { include: { profile: true } } },
+    });
+    if (!resetRequest || resetRequest.status !== "pending")
+      return response
+        .status(404)
+        .json({ error: "Solicitação não encontrada ou já atendida" });
+    if (!canResetPasswordOf(request, resetRequest.user.profile?.role))
+      return response.status(403).json({ error: "Acesso não permitido" });
+    await prisma.passwordResetRequest.update({
+      where: { id: resetRequest.id },
+      data: {
+        status: "dismissed",
+        resolvedAt: new Date(),
+        resolvedByUserId: request.user.id,
+      },
+    });
+    broadcast("password-reset-resolved");
+    response.json({ dismissed: true });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Chamados de suporte: qualquer usuario logado abre; admin/operador atendem.
@@ -1932,6 +2106,9 @@ app.post("/api/admin/users", auth, requireAdmin, async (request, response) => {
     return response.status(400).json({
       error: "Nome, e-mail, perfil e senha inicial válida são obrigatórios",
     });
+  const adminUserPhoneError = await phoneUniquenessError(phone);
+  if (adminUserPhoneError)
+    return response.status(409).json({ error: adminUserPhoneError });
   try {
     const passwordHash = await hashPassword(initialPassword);
     const user = await prisma.user.create({
@@ -1962,6 +2139,73 @@ app.post("/api/admin/users", auth, requireAdmin, async (request, response) => {
     response.status(400).json({ error: "Não foi possível criar o acesso" });
   }
 });
+
+// Admin/operador cadastra um motorista já aprovado, só com os dados essenciais.
+app.post(
+  "/api/admin/drivers",
+  auth,
+  requireOperations,
+  async (request, response) => {
+    const text = (value) => (typeof value === "string" ? value.trim() : "");
+    const fullName = text(request.body?.fullName);
+    const email = text(request.body?.email).toLowerCase();
+    const phone = text(request.body?.phone);
+    const compartments = text(request.body?.compartments);
+    const password =
+      typeof request.body?.password === "string" ? request.body.password : "";
+    if (!fullName || !email || !phone || password.length < 6 || !compartments)
+      return response.status(400).json({
+        error:
+          "Informe nome, telefone, e-mail, senha (mínimo 6 caracteres) e compartimentação",
+      });
+    if (!emailPattern.test(email))
+      return response.status(400).json({ error: "Informe um e-mail válido" });
+    const driverPhoneError = await phoneUniquenessError(phone);
+    if (driverPhoneError)
+      return response.status(409).json({ error: driverPhoneError });
+    try {
+      const passwordHash = await hashPassword(password);
+      const user = await prisma.user.create({
+        data: {
+          fullName,
+          email,
+          phone,
+          passwordHash,
+          profile: {
+            create: {
+              fullName,
+              role: "driver",
+              requestedRole: "driver",
+              approved: true,
+              registrationNotes: "Cadastro criado pela operação",
+            },
+          },
+          driver: {
+            create: {
+              fullName,
+              email,
+              phone,
+              compartments,
+              employmentType: "autonomous",
+              homologationStatus: "active",
+            },
+          },
+        },
+        include: { driver: true },
+      });
+      broadcast("driver-updated");
+      response.status(201).json({ driver: publicDriver(user.driver) });
+    } catch (error) {
+      if (error?.code === "P2002")
+        return response
+          .status(409)
+          .json({ error: uniqueConflictMessage(error) });
+      response
+        .status(400)
+        .json({ error: "Não foi possível cadastrar o motorista" });
+    }
+  },
+);
 
 app.patch(
   "/api/admin/users/:userId/password",
@@ -2366,35 +2610,39 @@ app.patch(
             : "Confira razão social, CNPJ, telefone, endereço e e-mail da transportadora antes de aprovar",
       });
     }
-    const driverData = request.body?.driver || {};
-    const requiredDriverFields = user.profile.companyId
-      ? ["fullName", "phone"]
-      : [
-          "fullName",
-          "phone",
-          "cpf",
-          "cnh",
-          "cnhCategory",
-          "cnhExpiresAt",
-          "vehicleModel",
-          "vehicleYear",
-          "plate",
-          "city",
-          "state",
-          "capacity",
-          "compartments",
-        ];
+    // Motorista exige apenas nome, telefone e compartimentação (e-mail e senha
+    // já vêm do cadastro). Campos não enviados usam o que já está salvo.
+    const driverData = { ...(request.body?.driver || {}) };
+    for (const field of ["fullName", "phone", "compartments"]) {
+      if (typeof driverData[field] !== "string" || !driverData[field].trim())
+        driverData[field] =
+          user.driver?.[field] ??
+          (field === "fullName"
+            ? user.fullName
+            : field === "phone"
+              ? user.phone
+              : "");
+    }
     if (
       assignedRole === "driver" &&
-      requiredDriverFields.some(
+      ["fullName", "phone", "compartments"].some(
         (field) =>
           typeof driverData[field] !== "string" || !driverData[field].trim(),
       )
     ) {
       return response.status(400).json({
         error:
-          "Preencha todos os campos obrigatórios do motorista antes de aprovar",
+          "Informe nome, telefone e compartimentação do motorista antes de aprovar",
       });
+    }
+    if (assignedRole === "driver") {
+      const approvalPhoneError = await phoneUniquenessError(
+        driverData.phone,
+        { userId: user.id, driverId: user.driver?.id },
+        user.driver?.phone ?? user.phone,
+      );
+      if (approvalPhoneError)
+        return response.status(409).json({ error: approvalPhoneError });
     }
     const initialPassword =
       typeof request.body?.initialPassword === "string"
@@ -2587,6 +2835,15 @@ app.patch("/api/drivers/me", auth, async (request, response) => {
   if (data.cnhExpiresAt) data.cnhExpiresAt = new Date(data.cnhExpiresAt);
   if ("cpf" in data) data.cpf = normalizeDocument(data.cpf);
   if ("cnh" in data) data.cnh = normalizeDocument(data.cnh);
+  if (typeof data.phone === "string") {
+    const selfPhoneError = await phoneUniquenessError(
+      data.phone,
+      { userId: request.user.id, driverId: request.user.driver.id },
+      request.user.driver.phone,
+    );
+    if (selfPhoneError)
+      return response.status(409).json({ error: selfPhoneError });
+  }
   try {
     await prisma.driver.update({ where: { id: request.user.driver.id }, data });
   } catch (error) {
@@ -2956,10 +3213,12 @@ app.post(
     const capacity =
       driver.capacity?.trim() ||
       driver.vehicleAssignments?.[0]?.vehicle?.capacity?.trim() ||
+      driver.compartments?.trim() ||
       "";
     if (decision === "accept" && !capacity)
       return response.status(409).json({
-        error: "Cadastre a capacidade do veículo antes de aceitar a oferta",
+        error:
+          "Cadastre a capacidade ou compartimentação antes de aceitar a oferta",
       });
 
     try {
@@ -3274,6 +3533,47 @@ const resolveExistingCompanyIds = async (transaction, companyIds) => {
   return companyIds;
 };
 
+// Resolve links curtos do Google Maps (maps.app.goo.gl) para a URL final com
+// coordenadas. Só segue redirecionamentos para hosts do Google (evita SSRF).
+const mapLinkHostAllowed = (hostname) =>
+  hostname === "maps.app.goo.gl" ||
+  hostname === "goo.gl" ||
+  /(^|\.)google\.com(\.br)?$/.test(hostname);
+
+app.post(
+  "/api/operations/resolve-map-link",
+  auth,
+  requireOperations,
+  async (request, response) => {
+    let current;
+    try {
+      current = new URL(String(request.body?.url ?? "").trim());
+    } catch {
+      return response.status(400).json({ error: "Link inválido" });
+    }
+    try {
+      for (let hop = 0; hop < 5; hop += 1) {
+        if (current.protocol !== "https:" || !mapLinkHostAllowed(current.hostname))
+          return response
+            .status(400)
+            .json({ error: "Informe um link do Google Maps" });
+        const result = await fetch(current, {
+          redirect: "manual",
+          signal: AbortSignal.timeout(8000),
+        });
+        const location = result.headers.get("location");
+        if (result.status < 300 || result.status >= 400 || !location) break;
+        current = new URL(location, current);
+      }
+      response.json({ url: current.toString() });
+    } catch {
+      response
+        .status(502)
+        .json({ error: "Não foi possível abrir o link do Google Maps" });
+    }
+  },
+);
+
 app.get(
   "/api/operations/locations",
   auth,
@@ -3298,6 +3598,11 @@ app.post(
   auth,
   requireOperations,
   async (request, response) => {
+    const newLocationPhoneError = await phoneUniquenessError(
+      request.body?.phone,
+    );
+    if (newLocationPhoneError)
+      return response.status(409).json({ error: newLocationPhoneError });
     try {
       const companyIds = Array.isArray(request.body?.companyIds)
         ? [
@@ -3349,6 +3654,20 @@ app.patch(
   auth,
   requireOperations,
   async (request, response) => {
+    // Validado fora da transação: no SQLite, consultar de dentro dela trava.
+    const locationBefore = await prisma.operationalLocation.findUnique({
+      where: { id: request.params.locationId },
+      select: { phone: true },
+    });
+    const locationPhoneError = locationBefore
+      ? await phoneUniquenessError(
+          request.body?.phone,
+          { locationId: request.params.locationId },
+          locationBefore.phone,
+        )
+      : null;
+    if (locationPhoneError)
+      return response.status(409).json({ error: locationPhoneError });
     try {
       const companyIds = Array.isArray(request.body?.companyIds)
         ? [
@@ -3723,25 +4042,15 @@ app.post(
       !fullName ||
       !email ||
       !phone ||
-      !birthDate ||
       password.length < 6 ||
-      [
-        cpf,
-        cnh,
-        cnhCategory,
-        cnhExpiresAt,
-        city,
-        state,
-        vehicleModel,
-        vehicleYear,
-        plate,
-        capacity,
-        compartments,
-      ].some((value) => !value)
+      !compartments
     )
-      return response
-        .status(400)
-        .json({ error: "Preencha todos os campos obrigatórios do motorista" });
+      return response.status(400).json({
+        error: "Informe nome, telefone, e-mail, senha e compartimentação",
+      });
+    const carrierDriverPhoneError = await phoneUniquenessError(phone);
+    if (carrierDriverPhoneError)
+      return response.status(409).json({ error: carrierDriverPhoneError });
     try {
       const passwordHash = await hashPassword(password);
       const user = await prisma.$transaction(async (transaction) => {
@@ -3767,16 +4076,16 @@ app.post(
                 fullName,
                 email,
                 phone,
-                cpf,
-                cnh,
-                cnhCategory,
-                cnhExpiresAt: new Date(cnhExpiresAt),
-                city,
-                state,
-                vehicleModel,
-                vehicleYear: Number(vehicleYear),
-                plate,
-                capacity,
+                cpf: cpf || null,
+                cnh: cnh || null,
+                cnhCategory: cnhCategory || null,
+                cnhExpiresAt: cnhExpiresAt ? new Date(cnhExpiresAt) : null,
+                city: city || null,
+                state: state || null,
+                vehicleModel: vehicleModel || null,
+                vehicleYear: vehicleYear ? Number(vehicleYear) : null,
+                plate: plate || null,
+                capacity: capacity || null,
                 compartments,
                 locationSharingAuthorized,
                 employmentType: "carrier",
@@ -4099,6 +4408,21 @@ app.patch(
       return response
         .status(400)
         .json({ error: "Selecione a transportadora do motorista" });
+    if (typeof data.phone === "string") {
+      const currentDriver = await prisma.driver.findUnique({
+        where: { id: request.params.driverId },
+        select: { id: true, userId: true, phone: true },
+      });
+      const editPhoneError = currentDriver
+        ? await phoneUniquenessError(
+            data.phone,
+            { userId: currentDriver.userId, driverId: currentDriver.id },
+            currentDriver.phone,
+          )
+        : null;
+      if (editPhoneError)
+        return response.status(409).json({ error: editPhoneError });
+    }
     const driver = await prisma.$transaction(async (transaction) => {
       const updatedDriver = await transaction.driver.update({
         where: { id: request.params.driverId },
@@ -4442,7 +4766,7 @@ const alertDriversAboutRoutes = async ({ routes, senderUserId, intro }) => {
   });
   if (routes.length > 8) lines.push(`… e mais ${routes.length - 8} rota(s).`);
   const body =
-    `${intro}\n${lines.join("\n")}\nFale com a operação para pegar a rota.`.slice(
+    `${intro}\n${lines.join("\n")}\nAbra o mural de rotas para aceitar.`.slice(
       0,
       1000,
     );
@@ -4461,37 +4785,26 @@ const alertDriversAboutRoutes = async ({ routes, senderUserId, intro }) => {
 const driverCountText = (count) =>
   count === 1 ? "1 motorista homologado" : `${count} motoristas homologados`;
 
-// Início do dia em Brasília (UTC-3), para "rotas disponíveis do dia".
-const startOfTodayInBrazil = () => {
-  const local = new Date(Date.now() - 3 * 60 * 60 * 1000);
-  return new Date(
-    Date.UTC(
-      local.getUTCFullYear(),
-      local.getUTCMonth(),
-      local.getUTCDate(),
-      3,
-    ),
-  );
-};
-
+// Alerta todos os motoristas sobre todas as rotas em aberto, de qualquer data.
+// "/today" continua aceito para versões antigas do painel ainda em cache.
 app.post(
-  "/api/freight-route-alerts/today",
+  ["/api/freight-route-alerts/open", "/api/freight-route-alerts/today"],
   auth,
   requireOperations,
   async (request, response) => {
     const routes = await prisma.freightRoute.findMany({
-      where: { status: "open", createdAt: { gte: startOfTodayInBrazil() } },
+      where: { status: "open" },
       include: freightRouteInclude,
       orderBy: { createdAt: "asc" },
     });
     if (!routes.length)
       return response
         .status(409)
-        .json({ error: "Não há rotas disponíveis hoje para avisar" });
+        .json({ error: "Não há rotas em aberto para avisar" });
     const { driverCount } = await alertDriversAboutRoutes({
       routes,
       senderUserId: request.user.id,
-      intro: `Rotas disponíveis hoje (${routes.length}):`,
+      intro: `Rotas em aberto (${routes.length}):`,
     });
     response.json({
       route_count: routes.length,
@@ -4500,6 +4813,164 @@ app.post(
         ? `Alerta com ${routes.length} rota(s) enviado para ${driverCountText(driverCount)}.`
         : "Nenhum motorista homologado para receber o alerta.",
     });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Mural de rotas do motorista: lista as rotas em aberto e permite aceitar.
+// O aceite fica registrado no chat do motorista com a operação.
+// ---------------------------------------------------------------------------
+const routeBoardPlace = (location) => ({
+  name: location.name,
+  address: location.address,
+  city: location.city,
+  state: location.state,
+});
+
+const routeBoardItem = (route) => ({
+  id: route.id,
+  collection_point: routeBoardPlace(route.collectionPoint),
+  final_customer: routeBoardPlace(route.finalCustomer),
+  distance_km: route.distanceKm,
+  created_at: route.createdAt.toISOString(),
+});
+
+// Abre o balão do chat do motorista no painel de admins e operadores
+// (aceite ou cancelamento de rota feito pelo próprio motorista).
+const notifyOperationsAboutDriverRoute = async (
+  type,
+  { driver, route, messageId },
+) => {
+  const operationsUsers = await prisma.profile.findMany({
+    where: { role: { in: ["admin", "operator"] }, approved: true },
+    select: { userId: true },
+  });
+  const alertData = {
+    driverId: driver.id,
+    driverName: driver.fullName,
+    route: `${route.collectionPoint.name} → ${route.finalCustomer.name}`,
+    messageId,
+  };
+  for (const { userId } of operationsUsers) broadcast(type, userId, alertData);
+};
+
+const routeBoardLabel = (location) =>
+  [location.name, [location.city, location.state].filter(Boolean).join("/")]
+    .filter(Boolean)
+    .join(" · ");
+
+app.get("/api/drivers/me/route-board", auth, async (request, response) => {
+  if (!request.user.driver)
+    return response
+      .status(403)
+      .json({ error: "Mural disponível apenas para motoristas" });
+  const routes = await prisma.freightRoute.findMany({
+    where: { status: "open" },
+    include: { collectionPoint: true, finalCustomer: true },
+    orderBy: { createdAt: "desc" },
+  });
+  const activeAssignment = await prisma.freightRouteAssignment.findFirst({
+    where: { driverId: request.user.driver.id, status: "active" },
+    select: { id: true },
+  });
+  response.json({
+    routes: routes.map(routeBoardItem),
+    has_active_route: Boolean(activeAssignment),
+  });
+});
+
+app.post(
+  "/api/drivers/me/route-board/:routeId/accept",
+  auth,
+  async (request, response) => {
+    if (!request.user.driver)
+      return response
+        .status(403)
+        .json({ error: "Somente motoristas podem aceitar rotas" });
+    const driver = await prisma.driver.findUnique({
+      where: { id: request.user.driver.id },
+      include: {
+        vehicleAssignments: {
+          where: { endedAt: null },
+          include: { vehicle: true },
+          orderBy: { startedAt: "desc" },
+          take: 1,
+        },
+      },
+    });
+    if (driver.homologationStatus !== "active")
+      return response.status(409).json({
+        error: "Seu cadastro precisa estar homologado para aceitar rotas",
+      });
+    const capacity =
+      driver.capacity?.trim() ||
+      driver.vehicleAssignments?.[0]?.vehicle?.capacity?.trim() ||
+      driver.compartments?.trim() ||
+      null;
+
+    try {
+      const result = await prisma.$transaction(async (transaction) => {
+        const existingActive =
+          await transaction.freightRouteAssignment.findFirst({
+            where: { driverId: driver.id, status: "active" },
+          });
+        if (existingActive) throw new Error("EXISTING_ACTIVE_ROUTE");
+        // Trava atômica: só o primeiro motorista que aceitar leva a rota.
+        const claimed = await transaction.freightRoute.updateMany({
+          where: { id: request.params.routeId, status: "open" },
+          data: { status: "assigned" },
+        });
+        if (!claimed.count) throw new Error("ROUTE_NOT_AVAILABLE");
+        const route = await transaction.freightRoute.findUnique({
+          where: { id: request.params.routeId },
+          include: { collectionPoint: true, finalCustomer: true },
+        });
+        const assignment = await transaction.freightRouteAssignment.create({
+          data: { routeId: route.id, driverId: driver.id, capacity },
+        });
+        const km = Number.isFinite(route.distanceKm)
+          ? ` (${route.distanceKm.toFixed(0)} km)`
+          : "";
+        const message = await transaction.driverChatMessage.create({
+          data: {
+            driverId: driver.id,
+            userId: request.user.id,
+            kind: "route_accepted",
+            body: `✅ Aceitei a rota pelo mural:\n${routeBoardLabel(route.collectionPoint)} → ${routeBoardLabel(route.finalCustomer)}${km}`,
+          },
+        });
+        return { route, assignment, message };
+      });
+      broadcast("freight-route-assigned");
+      broadcast("driver-chat-message-created");
+      broadcast("route-board-updated");
+      await notifyOperationsAboutDriverRoute("driver-route-accepted", {
+        driver,
+        route: result.route,
+        messageId: result.message.id,
+      });
+      response.status(201).json({
+        route: routeBoardItem(result.route),
+        assignment_id: result.assignment.id,
+        message_id: result.message.id,
+      });
+    } catch (error) {
+      const responses = {
+        ROUTE_NOT_AVAILABLE: [
+          409,
+          "Esta rota já foi aceita por outro motorista ou não está mais em aberto",
+        ],
+        EXISTING_ACTIVE_ROUTE: [
+          409,
+          "Você já possui uma rota em andamento. Conclua-a antes de aceitar outra",
+        ],
+      };
+      const [status, message] = responses[error?.message] ?? [
+        500,
+        "Não foi possível aceitar a rota",
+      ];
+      response.status(status).json({ error: message });
+    }
   },
 );
 
@@ -4994,11 +5465,12 @@ app.post(
     const capacity =
       driver.capacity?.trim() ||
       driver.vehicleAssignments?.[0]?.vehicle?.capacity?.trim() ||
+      driver.compartments?.trim() ||
       "";
     if (!capacity)
       return response.status(409).json({
         error:
-          "Motorista não possui capacidade cadastrada. Atualize o cadastro antes de vinculá-lo à rota",
+          "Motorista não possui capacidade nem compartimentação cadastrada. Atualize o cadastro antes de vinculá-lo à rota",
       });
 
     try {
@@ -5115,6 +5587,32 @@ app.patch(
       });
     }
     broadcast("freight-route-assignment-updated");
+    broadcast("route-board-updated");
+    // Cancelamento feito pelo motorista: registra no chat e avisa a operação.
+    if (isSelfDriver && status === "cancelled") {
+      try {
+        const km = Number.isFinite(route.distanceKm)
+          ? ` (${route.distanceKm.toFixed(0)} km)`
+          : "";
+        const message = await prisma.driverChatMessage.create({
+          data: {
+            driverId: assignment.driverId,
+            userId: request.user.id,
+            kind: "route_cancelled",
+            body: `❌ Cancelei a rota:\n${routeBoardLabel(route.collectionPoint)} → ${routeBoardLabel(route.finalCustomer)}${km}`,
+          },
+        });
+        broadcast("driver-chat-message-created");
+        await notifyOperationsAboutDriverRoute("driver-route-cancelled", {
+          driver: request.user.driver,
+          route,
+          messageId: message.id,
+        });
+      } catch (error) {
+        // O cancelamento já foi salvo; a falha do aviso não deve desfazê-lo.
+        console.error("Falha ao avisar a operação sobre o cancelamento", error);
+      }
+    }
     const updated = await prisma.freightRoute.findUnique({
       where: { id: assignment.routeId },
       include: freightRouteInclude,

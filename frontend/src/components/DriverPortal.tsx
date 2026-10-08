@@ -23,6 +23,7 @@ import {
   MessageCircle,
   DollarSign,
   Route as RouteIcon,
+  ClipboardList,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import type { Driver } from "@/lib/types";
@@ -32,6 +33,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { SettingsMenu } from "@/components/SettingsMenu";
 import { DriverChat } from "@/components/DriverChat";
 import { FreightChatHistory } from "@/components/FreightChatHistory";
+import { RouteBoardModal } from "@/components/RouteBoardModal";
 import { apiEventSource, apiFetch } from "@/lib/api";
 
 type Tab = "home" | "profile" | "chat" | "routes" | "recebimentos" | "settings";
@@ -87,7 +89,8 @@ export function DriverPortal() {
   const [tab, setTab] = useState<Tab>("home");
   const [driver, setDriver] = useState<Driver | null>(null);
   const [freightOfferNotice, setFreightOfferNotice] = useState(false);
-  const [routeAlertNotice, setRouteAlertNotice] = useState(false);
+  const [routeBoardOpen, setRouteBoardOpen] = useState(false);
+  const routeBoardShownFor = useRef<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [locationStatus, setLocationStatus] = useState<
@@ -111,6 +114,13 @@ export function DriverPortal() {
     return () => window.removeEventListener("acneto-driver-go-home", goHome);
   }, []);
 
+  // Mural de rotas abre sempre que o motorista entra no portal.
+  useEffect(() => {
+    if (!driverId || routeBoardShownFor.current === driverId) return;
+    routeBoardShownFor.current = driverId;
+    setRouteBoardOpen(true);
+  }, [driverId]);
+
   useEffect(() => {
     const token = accessToken();
     if (!driverId || !token) return;
@@ -122,7 +132,7 @@ export function DriverPortal() {
         const payload = JSON.parse(event.data) as { type?: string };
         if (payload.type === "nearest-driver-freight-offer")
           setFreightOfferNotice(true);
-        if (payload.type === "route-alert") setRouteAlertNotice(true);
+        if (payload.type === "route-alert") setRouteBoardOpen(true);
       } catch {
         // Ignore malformed SSE payloads.
       }
@@ -462,7 +472,14 @@ export function DriverPortal() {
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f5f7fa]">
-      <TopBar driver={driver} onSignOut={signOut} />
+      <TopBar
+        driver={driver}
+        onSignOut={signOut}
+        tab={tab}
+        setTab={setTab}
+        routeBoardOpen={routeBoardOpen}
+        onOpenRouteBoard={() => setRouteBoardOpen(true)}
+      />
       {freightOfferNotice && (
         <div className="fixed inset-x-4 top-20 z-40 mx-auto flex max-w-lg items-center gap-3 rounded-xl border border-blue-200 bg-white p-4 shadow-lg">
           <MessageCircle className="shrink-0 text-blue-700" size={22} />
@@ -495,37 +512,14 @@ export function DriverPortal() {
         </div>
       )}
 
-      {routeAlertNotice && (
-        <div className="fixed inset-x-4 top-20 z-40 mx-auto flex max-w-lg items-center gap-3 rounded-xl border border-amber-200 bg-white p-4 shadow-lg">
-          <MessageCircle className="shrink-0 text-amber-600" size={22} />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold text-[#0b1d3a]">
-              Rotas disponíveis
-            </p>
-            <p className="text-xs text-slate-500">
-              A operação enviou um alerta de rotas. Veja no chat.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setRouteAlertNotice(false);
-              setTab("chat");
-            }}
-            className="shrink-0 rounded-lg bg-[#1052c7] px-3 py-2 text-xs font-semibold text-white"
-          >
-            Ver alerta
-          </button>
-          <button
-            type="button"
-            onClick={() => setRouteAlertNotice(false)}
-            aria-label="Fechar alerta de rotas"
-            className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100"
-          >
-            <X size={16} />
-          </button>
-        </div>
-      )}
+      <RouteBoardModal
+        open={routeBoardOpen}
+        onClose={() => setRouteBoardOpen(false)}
+        onAccepted={() => {
+          setRouteBoardOpen(false);
+          setTab("chat");
+        }}
+      />
 
       {locationPromptOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-4 sm:items-center">
@@ -690,6 +684,7 @@ export function DriverPortal() {
             driverId={driver.id}
             participantName="Operação"
             initiallyOpen
+            onOpenRouteBoard={() => setRouteBoardOpen(true)}
           />
         )}
         {tab === "routes" && <DriverRoutesView />}
@@ -699,7 +694,12 @@ export function DriverPortal() {
         {tab === "settings" && <SettingsView onSignOut={signOut} />}
       </main>
 
-      <BottomNav tab={tab} setTab={setTab} />
+      <BottomNav
+        tab={tab}
+        setTab={setTab}
+        routeBoardOpen={routeBoardOpen}
+        onOpenRouteBoard={() => setRouteBoardOpen(true)}
+      />
     </div>
   );
 }
@@ -748,10 +748,14 @@ function syncOperatorDriver(driver: Driver) {
 function TopBar({
   driver,
   onSignOut,
+  tab,
+  setTab,
+  routeBoardOpen,
+  onOpenRouteBoard,
 }: {
   driver: Driver;
   onSignOut: () => void;
-}) {
+} & NavProps) {
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3 sm:px-6">
@@ -779,6 +783,33 @@ function TopBar({
           </div>
         </div>
       </div>
+      {/* Em telas grandes, a navegação fica no topo (no celular, no rodapé). */}
+      <nav
+        aria-label="Navegação do motorista"
+        className="mx-auto hidden max-w-5xl gap-1 px-4 pb-2 sm:px-6 lg:flex"
+      >
+        {navItems.map(({ key, label, icon: Icon }) => {
+          const active = isNavActive(key, tab, routeBoardOpen);
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() =>
+                key === "board" ? onOpenRouteBoard() : setTab(key)
+              }
+              aria-current={active ? "page" : undefined}
+              className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                active
+                  ? "bg-blue-50 text-[#1052c7]"
+                  : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              }`}
+            >
+              <Icon size={17} strokeWidth={active ? 2.4 : 1.8} />
+              {label}
+            </button>
+          );
+        })}
+      </nav>
     </header>
   );
 }
@@ -1365,6 +1396,12 @@ function DriverRoutesView() {
     assignmentId: string,
     status: "cancelled",
   ) => {
+    if (
+      !window.confirm(
+        "Cancelar esta rota? A operação será avisada pelo chat e a rota volta para o mural.",
+      )
+    )
+      return;
     const response = await apiFetch(
       `/api/freight-routes/${routeId}/assignments/${assignmentId}`,
       {
@@ -1905,30 +1942,56 @@ function OnboardingView({ fullName }: { fullName: string }) {
   );
 }
 
-function BottomNav({ tab, setTab }: { tab: Tab; setTab: (tab: Tab) => void }) {
-  const items: { key: Tab; label: string; icon: typeof Truck }[] = [
-    { key: "home", label: "Início", icon: Zap },
-    { key: "profile", label: "Perfil", icon: User },
-    { key: "routes", label: "Rotas", icon: RouteIcon },
-    { key: "recebimentos", label: "Fretes", icon: DollarSign },
-    { key: "chat", label: "Chat", icon: MessageCircle },
-    { key: "settings", label: "Ajustes", icon: Settings },
-  ];
+// "board" não é uma aba: abre o mural de rotas disponíveis (modal).
+type NavKey = Tab | "board";
+type NavProps = {
+  tab: Tab;
+  setTab: (tab: Tab) => void;
+  routeBoardOpen: boolean;
+  onOpenRouteBoard: () => void;
+};
+
+const isNavActive = (key: NavKey, tab: Tab, routeBoardOpen: boolean) =>
+  key === "board" ? routeBoardOpen : !routeBoardOpen && tab === key;
+
+const navItems: { key: NavKey; label: string; icon: typeof Truck }[] = [
+  { key: "home", label: "Início", icon: Zap },
+  { key: "board", label: "Mural", icon: ClipboardList },
+  { key: "profile", label: "Perfil", icon: User },
+  { key: "routes", label: "Rotas", icon: RouteIcon },
+  { key: "recebimentos", label: "Fretes", icon: DollarSign },
+  { key: "chat", label: "Chat", icon: MessageCircle },
+  { key: "settings", label: "Ajustes", icon: Settings },
+];
+
+function BottomNav({
+  tab,
+  setTab,
+  routeBoardOpen,
+  onOpenRouteBoard,
+}: NavProps) {
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200 bg-white/95 backdrop-blur lg:hidden">
-      <div className="mx-auto flex max-w-5xl items-center justify-around px-2 py-2">
-        {items.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`flex flex-1 flex-col items-center gap-1 rounded-lg py-2 transition ${
-              tab === key ? "text-[#1052c7]" : "text-slate-400"
-            }`}
-          >
-            <Icon size={20} strokeWidth={tab === key ? 2.4 : 1.8} />
-            <span className="text-[10px] font-semibold">{label}</span>
-          </button>
-        ))}
+      <div className="mx-auto flex max-w-5xl items-center justify-around px-1 py-2">
+        {navItems.map(({ key, label, icon: Icon }) => {
+          const active = isNavActive(key, tab, routeBoardOpen);
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() =>
+                key === "board" ? onOpenRouteBoard() : setTab(key)
+              }
+              aria-current={active ? "page" : undefined}
+              className={`flex min-w-0 flex-1 flex-col items-center gap-1 rounded-lg py-2 transition ${
+                active ? "text-[#1052c7]" : "text-slate-400"
+              }`}
+            >
+              <Icon size={20} strokeWidth={active ? 2.4 : 1.8} />
+              <span className="text-[10px] font-semibold">{label}</span>
+            </button>
+          );
+        })}
       </div>
     </nav>
   );

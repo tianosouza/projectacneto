@@ -15,6 +15,7 @@ type ChatMessage = {
   id: string;
   user_id: string;
   body: string;
+  kind?: string;
   created_at: string;
   freight_offer?: {
     id: string;
@@ -36,12 +37,14 @@ export function DriverChat({
   participantName,
   token,
   onBack,
+  onOpenRouteBoard,
 }: {
   driverId: string;
   driverUserId: string;
   participantName: string;
   token: string;
   onBack: () => void;
+  onOpenRouteBoard?: () => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -317,6 +320,25 @@ export function DriverChat({
                 >
                   {message.body}
                 </Text>
+                {message.kind === "route_alert" && onOpenRouteBoard && (
+                  <TouchableOpacity
+                    onPress={onOpenRouteBoard}
+                    style={{
+                      alignSelf: "flex-start",
+                      backgroundColor: "#1052c7",
+                      borderRadius: 8,
+                      marginTop: 8,
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                    }}
+                  >
+                    <Text
+                      style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}
+                    >
+                      Ver rotas e aceitar
+                    </Text>
+                  </TouchableOpacity>
+                )}
                 {message.freight_offer && (
                   <View
                     style={{

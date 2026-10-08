@@ -5,7 +5,14 @@ import {
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Loader2, MessageCircle, Minus, Send, X } from "lucide-react";
+import {
+  Loader2,
+  MessageCircle,
+  Minus,
+  Route as RouteIcon,
+  Send,
+  X,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import type { FreightChatOffer } from "@/lib/dashboardTypes";
@@ -14,6 +21,7 @@ type DriverChatMessage = {
   id: string;
   user_id: string;
   body: string;
+  kind?: string;
   created_at: string;
   freight_offer?: FreightChatOffer | null;
   user: { full_name: string | null; email: string };
@@ -39,17 +47,26 @@ export function DriverChat({
   initiallyOpen = false,
   openingProposal,
   freightContext,
+  onOpenRouteBoard,
+  alert,
 }: {
   driverId: string;
   participantName: string;
   initiallyOpen?: boolean;
   openingProposal?: { key: string; message: string };
   freightContext?: FreightContext;
+  /** Quando informado (portal do motorista), alertas de rota abrem o mural. */
+  onOpenRouteBoard?: () => void;
+  /**
+   * Modo balão de alerta (painel da operação): começa minimizado e piscando
+   * no canto inferior direito até ser aberto; `index` empilha vários balões.
+   */
+  alert?: { label: string; index: number; onDismiss: () => void };
 }) {
   const { user, profile } = useAuth();
-  const [open, setOpen] = useState(initiallyOpen);
-  const [minimized, setMinimized] = useState(false);
-  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen || Boolean(alert));
+  const [minimized, setMinimized] = useState(Boolean(alert));
+  const [hasUnreadMessages, setHasUnreadMessages] = useState(Boolean(alert));
   const [messages, setMessages] = useState<DriverChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [typingUser, setTypingUser] = useState<TypingUser | null>(null);
@@ -275,6 +292,7 @@ export function DriverChat({
     setOpen(false);
     setMinimized(false);
     setHasUnreadMessages(false);
+    alert?.onDismiss();
   };
 
   const startDragging = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -438,6 +456,7 @@ export function DriverChat({
       <div
         role="status"
         aria-live="polite"
+        style={alert ? { bottom: 16 + alert.index * 64 } : undefined}
         className={`fixed bottom-4 right-4 z-[60] flex items-center gap-1 rounded-lg border p-2 shadow-xl ${
           hasUnreadMessages
             ? "animate-pulse border-red-600 bg-red-50 ring-2 ring-red-200"
@@ -455,16 +474,35 @@ export function DriverChat({
           }
         >
           <MessageCircle size={17} />
-          {participantName}
+          <span className="flex flex-col items-start text-left">
+            <span>{participantName}</span>
+            {alert && hasUnreadMessages && (
+              <span className="max-w-[240px] truncate text-xs font-medium text-red-700">
+                {alert.label}
+              </span>
+            )}
+          </span>
           {hasUnreadMessages && (
             <span className="h-2.5 w-2.5 rounded-full bg-red-600" />
           )}
         </button>
+        {alert && (
+          <button
+            type="button"
+            onClick={closeChat}
+            className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            title="Dispensar"
+            aria-label={`Dispensar conversa com ${participantName}`}
+          >
+            <X size={15} />
+          </button>
+        )}
       </div>
     );
   }
 
   if (!open) {
+    if (alert) return null;
     return (
       <button
         type="button"
@@ -573,6 +611,15 @@ export function DriverChat({
                   <p className="whitespace-pre-wrap break-words text-sm">
                     {item.body}
                   </p>
+                  {item.kind === "route_alert" && onOpenRouteBoard && (
+                    <button
+                      type="button"
+                      onClick={onOpenRouteBoard}
+                      className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#1052c7] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0a3a90]"
+                    >
+                      <RouteIcon size={14} /> Ver rotas e aceitar
+                    </button>
+                  )}
                   {item.freight_offer && (
                     <div
                       className={`mt-3 rounded-lg border p-3 ${

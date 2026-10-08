@@ -24,6 +24,7 @@ import {
   Image,
 } from "react-native";
 import { DriverChat } from "./DriverChat";
+import { RouteBoardModal } from "./RouteBoardModal";
 
 type MobileScreen =
   | "home"
@@ -295,6 +296,27 @@ function AppContent() {
   const [screen, setScreen] = useState<MobileScreen>("home");
   const seenOfferIds = useRef(new Set<string>());
   const seenAlertIds = useRef(new Set<string>());
+  const [routeBoardOpen, setRouteBoardOpen] = useState(false);
+  // Entrou com senha temporária (redefinida pela operação): precisa criar outra.
+  const [mustChangePassword, setMustChangePassword] = useState(false);
+  const routeBoardShownFor = useRef<string | null>(null);
+
+  // Mural de rotas abre sempre que o motorista entra no app.
+  useEffect(() => {
+    if (!token || !driver?.id || mustChangePassword) {
+      if (!token) routeBoardShownFor.current = null;
+      return;
+    }
+    if (routeBoardShownFor.current === driver.id) return;
+    routeBoardShownFor.current = driver.id;
+    setScreen("home");
+    setRouteBoardOpen(true);
+  }, [token, driver?.id, mustChangePassword]);
+
+  const openRouteBoard = () => {
+    setScreen("home");
+    setRouteBoardOpen(true);
+  };
 
   useEffect(() => {
     void restoreSession();
@@ -356,15 +378,10 @@ function AppContent() {
         for (const message of body.messages ?? [])
           if (message.kind === "route_alert")
             seenAlertIds.current.add(message.id);
+        // Alerta da operação ("alertar motoristas") abre o mural de rotas.
         if (recentAlerts.length > 0) {
-          Alert.alert(
-            "Rotas disponíveis",
-            recentAlerts[recentAlerts.length - 1].body,
-            [
-              { text: "Depois", style: "cancel" },
-              { text: "Abrir chat", onPress: () => setScreen("chat") },
-            ],
-          );
+          setScreen("home");
+          setRouteBoardOpen(true);
         }
         for (const message of pendingOffers) {
           const offerId = message.freight_offer?.id;
@@ -422,6 +439,15 @@ function AppContent() {
       });
       if (!response.ok) throw new Error("Sessão expirada");
       const body = (await response.json()) as { driver: Driver };
+      const meResponse = await apiFetch("/api/auth/me", {
+        headers: { Authorization: `Bearer ${savedToken}` },
+      });
+      const me = meResponse.ok
+        ? ((await meResponse.json()) as {
+            profile?: { mustChangePassword?: boolean };
+          })
+        : null;
+      setMustChangePassword(me?.profile?.mustChangePassword === true);
       setToken(savedToken);
       setDriver(body.driver);
       await AsyncStorage.setItem(DRIVER_KEY, JSON.stringify(body.driver));
@@ -548,6 +574,7 @@ function AppContent() {
     await AsyncStorage.multiRemove([TOKEN_KEY, DRIVER_KEY]);
     setToken(null);
     setDriver(null);
+    setMustChangePassword(false);
   }
 
   async function saveDriverProfile(updates: Partial<Driver>) {
@@ -601,6 +628,15 @@ function AppContent() {
   }
 
   if (loading) return <LoadingScreen />;
+  if (token && driver && mustChangePassword) {
+    return (
+      <ChangePasswordScreen
+        token={token}
+        onDone={() => setMustChangePassword(false)}
+        onLogout={logout}
+      />
+    );
+  }
   if (!token || !driver) {
     return (
       <LoginScreen
@@ -704,10 +740,20 @@ function AppContent() {
               participantName="Operação"
               token={token}
               onBack={() => setScreen("home")}
+              onOpenRouteBoard={openRouteBoard}
             />
           </View>
         </View>
       )}
+      <RouteBoardModal
+        visible={routeBoardOpen}
+        token={token}
+        onClose={() => setRouteBoardOpen(false)}
+        onAccepted={() => {
+          setRouteBoardOpen(false);
+          setScreen("chat");
+        }}
+      />
     </View>
   );
 }
@@ -1219,6 +1265,188 @@ function LoginScreen({
           ) : (
             <Text style={styles.primaryButtonText}>Entrar no painel</Text>
           )}
+        </TouchableOpacity>
+        <ForgotPasswordForm email={email} />
+      </View>
+    </SafeAreaView>
+  );
+}
+
+// Pedido de nova senha: a operação redefine e envia pelo WhatsApp.
+function ForgotPasswordForm({ email }: { email: string }) {
+  const [open, setOpen] = useState(false);
+  const [phone, setPhone] = useState("");
+  const [needsEmail, setNeedsEmail] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function requestReset() {
+    setSending(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await apiFetch("/api/auth/password-reset/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone,
+          email: needsEmail ? email.trim() : undefined,
+        }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        message?: string;
+        error?: string;
+        needs_email?: boolean;
+      };
+      if (body.needs_email) setNeedsEmail(true);
+      if (!response.ok)
+        throw new Error(body.error ?? "Não foi possível enviar o pedido.");
+      setMessage(body.message ?? "Pedido enviado.");
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (!open)
+    return (
+      <TouchableOpacity onPress={() => setOpen(true)} style={{ marginTop: 18 }}>
+        <Text style={styles.forgotLink}>Esqueci minha senha</Text>
+      </TouchableOpacity>
+    );
+
+  return (
+    <View style={{ marginTop: 22 }}>
+      <Text style={styles.cardTitle}>Recuperar senha</Text>
+      {message ? (
+        <Text style={styles.forgotInfo}>{message}</Text>
+      ) : (
+        <>
+          <Text style={styles.forgotInfo}>
+            Informe o celular cadastrado. Um administrador vai redefinir sua
+            senha e enviá-la pelo WhatsApp.
+            {needsEmail
+              ? " Este celular está em mais de uma conta: preencha também o e-mail acima."
+              : ""}
+          </Text>
+          <TextInput
+            keyboardType="phone-pad"
+            placeholder="Celular com DDD"
+            placeholderTextColor="#94a3b8"
+            style={styles.input}
+            value={phone}
+            onChangeText={setPhone}
+          />
+          {!!error && <Text style={styles.forgotError}>{error}</Text>}
+          <TouchableOpacity
+            disabled={sending || !phone.trim()}
+            onPress={() => void requestReset()}
+            style={styles.primaryButton}
+          >
+            {sending ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.primaryButtonText}>Pedir nova senha</Text>
+            )}
+          </TouchableOpacity>
+        </>
+      )}
+      <TouchableOpacity onPress={() => setOpen(false)} style={{ marginTop: 14 }}>
+        <Text style={styles.forgotLink}>Voltar</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// Primeiro acesso com a senha temporária: obriga a criar uma nova senha.
+function ChangePasswordScreen({
+  token,
+  onDone,
+  onLogout,
+}: {
+  token: string;
+  onDone: () => void;
+  onLogout: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function save() {
+    setError("");
+    if (password.length < 8)
+      return setError("A nova senha deve ter no mínimo 8 caracteres.");
+    if (password !== confirmation)
+      return setError("As senhas não coincidem.");
+    setSaving(true);
+    try {
+      const response = await apiFetch("/api/auth/change-initial-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ password }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (!response.ok)
+        throw new Error(body.error ?? "Não foi possível salvar a senha.");
+      Alert.alert("Senha atualizada", "Sua nova senha foi salva.");
+      onDone();
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" />
+      <View style={styles.loginTop}>
+        <Image source={logo} style={styles.logo} />
+        <Text style={styles.loginTitle}>Crie sua nova senha</Text>
+        <Text style={styles.loginSubtitle}>
+          Você entrou com uma senha temporária enviada pela operação. Crie
+          agora a sua nova senha para continuar.
+        </Text>
+      </View>
+      <View style={styles.loginCard}>
+        <TextInput
+          placeholder="Nova senha (mínimo 8 caracteres)"
+          placeholderTextColor="#94a3b8"
+          secureTextEntry
+          style={styles.input}
+          value={password}
+          onChangeText={setPassword}
+        />
+        <TextInput
+          placeholder="Confirme a nova senha"
+          placeholderTextColor="#94a3b8"
+          secureTextEntry
+          style={styles.input}
+          value={confirmation}
+          onChangeText={setConfirmation}
+        />
+        {!!error && <Text style={styles.forgotError}>{error}</Text>}
+        <TouchableOpacity
+          disabled={saving}
+          onPress={() => void save()}
+          style={styles.primaryButton}
+        >
+          {saving ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.primaryButtonText}>Salvar nova senha</Text>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onLogout} style={{ marginTop: 18 }}>
+          <Text style={styles.forgotLink}>Sair</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -1948,6 +2176,24 @@ function DataScreenHeader({
 }
 
 const styles = StyleSheet.create({
+  forgotLink: {
+    color: "#f3d32e",
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  forgotInfo: {
+    color: "#8eb6ff",
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 12,
+  },
+  forgotError: {
+    color: "#fecaca",
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
   safe: { flex: 1, backgroundColor: "#07399f" },
   safeLight: { flex: 1, backgroundColor: "#07399f" },
   loading: {

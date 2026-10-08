@@ -23,6 +23,7 @@ model User {
   registrationAttachments RegistrationAttachment[]
   changeRequests AccountChangeRequest[]
   passwordResetTokens PasswordResetToken[]
+  passwordResetRequests PasswordResetRequest[]
   supportTickets SupportTicket[]
   driverChatMessages DriverChatMessage[]
   createdFreightRoutes FreightRoute[] @relation("FreightRouteCreator")
@@ -215,6 +216,22 @@ model SupportTicketAttachment {
   ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
   @@index([ticketId])
+}
+
+// Pedido de "esqueci minha senha": admin/operador redefine e envia pelo WhatsApp.
+model PasswordResetRequest {
+  id               String    @id @default(cuid())
+  userId           String
+  phone            String
+  status           String    @default("pending") // pending, resolved, dismissed
+  createdAt        DateTime  @default(now())
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([userId, status])
 }
 
 model PasswordResetToken {

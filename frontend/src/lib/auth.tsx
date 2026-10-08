@@ -1,4 +1,4 @@
-import {
+﻿import {
   createContext,
   useContext,
   useEffect,
@@ -119,14 +119,9 @@ type AuthContextValue = {
     birthDate?: string,
   ) => Promise<{ error: string | null; pending?: boolean }>;
   requestPasswordReset: (
-    email: string,
-    document: string,
-    birthDate: string,
-  ) => Promise<{ error: string | null; resetToken?: string }>;
-  resetPassword: (
-    token: string,
-    password: string,
-  ) => Promise<{ error: string | null }>;
+    phone: string,
+    email?: string,
+  ) => Promise<{ error: string | null; needsEmail?: boolean }>;
   changeInitialPassword: (
     password: string,
   ) => Promise<{ error: string | null }>;
@@ -299,42 +294,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const requestPasswordReset = async (
-    email: string,
-    document: string,
-    birthDate: string,
-  ) => {
+  const requestPasswordReset = async (phone: string, email?: string) => {
     try {
       const response = await apiFetch("/api/auth/password-reset/request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, document, birthDate }),
+        body: JSON.stringify({ phone, email: email || undefined }),
       });
       const body = (await response.json()) as {
         error?: string;
-        reset_token?: string;
+        needs_email?: boolean;
       };
-      if (!response.ok || !body.reset_token)
+      if (!response.ok)
         return {
-          error: body.error ?? "Não foi possível validar os dados informados",
+          needsEmail: body.needs_email === true,
+          error: body.error ?? "Não foi possível enviar o pedido de nova senha",
         };
-      return { error: null, resetToken: body.reset_token };
-    } catch {
-      return { error: "Servidor indisponível. Tente novamente." };
-    }
-  };
-
-  const resetPassword = async (token: string, password: string) => {
-    try {
-      const response = await apiFetch("/api/auth/password-reset/confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, password }),
-      });
-      const body = (await response.json()) as { error?: string };
-      return response.ok
-        ? { error: null }
-        : { error: body.error ?? "Não foi possível redefinir a senha" };
+      return { error: null };
     } catch {
       return { error: "Servidor indisponível. Tente novamente." };
     }
@@ -383,7 +359,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signIn,
         signUp,
         requestPasswordReset,
-        resetPassword,
         changeInitialPassword,
         signOut,
       }}

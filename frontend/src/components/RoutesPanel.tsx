@@ -5,6 +5,7 @@ import {
   Polyline,
   Popup,
   TileLayer,
+  useMap,
 } from "react-leaflet";
 import { divIcon, type LatLngTuple } from "leaflet";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -157,13 +158,46 @@ const routeLineColors = [
   "#0891b2",
 ];
 
+function RoutesMapViewport({ points }: { points: LatLngTuple[] }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (points.length > 0) {
+      map.fitBounds(points, { padding: [32, 32], maxZoom: 11 });
+    }
+  }, [map, points]);
+
+  return null;
+}
+
 function RoutesMap({ routes }: { routes: FreightRoute[] }) {
-  const located = routes.filter(
-    (route) =>
-      Number.isFinite(route.collection_point?.latitude) &&
-      Number.isFinite(route.collection_point?.longitude) &&
-      Number.isFinite(route.final_customer?.latitude) &&
-      Number.isFinite(route.final_customer?.longitude),
+  const located = useMemo(
+    () =>
+      routes.filter(
+        (route) =>
+          Number.isFinite(route.collection_point?.latitude) &&
+          Number.isFinite(route.collection_point?.longitude) &&
+          Number.isFinite(route.final_customer?.latitude) &&
+          Number.isFinite(route.final_customer?.longitude),
+      ),
+    [routes],
+  );
+  const allPoints = useMemo(
+    () =>
+      located.flatMap(
+        (route) =>
+          [
+            [
+              route.collection_point!.latitude!,
+              route.collection_point!.longitude!,
+            ] as LatLngTuple,
+            [
+              route.final_customer!.latitude!,
+              route.final_customer!.longitude!,
+            ] as LatLngTuple,
+          ] satisfies LatLngTuple[],
+      ),
+    [located],
   );
 
   if (located.length === 0) {
@@ -174,26 +208,16 @@ function RoutesMap({ routes }: { routes: FreightRoute[] }) {
     );
   }
 
-  const allPoints: LatLngTuple[] = located.flatMap((route) => [
-    [
-      route.collection_point!.latitude as number,
-      route.collection_point!.longitude as number,
-    ] as LatLngTuple,
-    [
-      route.final_customer!.latitude as number,
-      route.final_customer!.longitude as number,
-    ] as LatLngTuple,
-  ]);
-
   return (
     <div className="h-[420px] overflow-hidden rounded-2xl border border-slate-200">
       <MapContainer
         className="h-full w-full"
-        center={allPoints[0] ?? [-15.7939, -47.8828]}
-        zoom={allPoints.length > 0 ? 7 : 4}
+        center={[-14.235, -51.9253]}
+        zoom={4}
         scrollWheelZoom
         zoomControl
       >
+        <RoutesMapViewport points={allPoints} />
         <TileLayer
           attribution='&copy; <a href="https://www.esri.com/">Esri</a>, World Street Map'
           url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
@@ -588,7 +612,7 @@ function RoutesListTab({ drivers }: { drivers: DemoDriver[] }) {
     if (alertSending) return;
     if (
       !window.confirm(
-        "Enviar alerta com as rotas disponíveis de hoje para todos os motoristas online?",
+        "Enviar alerta com todas as rotas em aberto para todos os motoristas homologados?",
       )
     )
       return;
@@ -596,7 +620,7 @@ function RoutesListTab({ drivers }: { drivers: DemoDriver[] }) {
     setAlertMessage("");
     setAlertSending(true);
     try {
-      const response = await apiFetch("/api/freight-route-alerts/today", {
+      const response = await apiFetch("/api/freight-route-alerts/open", {
         method: "POST",
         headers: authHeaders(),
       });
@@ -637,7 +661,7 @@ function RoutesListTab({ drivers }: { drivers: DemoDriver[] }) {
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-60"
           >
             <Bell size={16} />{" "}
-            {alertSending ? "Enviando..." : "Alertar motoristas online"}
+            {alertSending ? "Enviando..." : "Alertar motoristas"}
           </button>
           <button
             type="button"

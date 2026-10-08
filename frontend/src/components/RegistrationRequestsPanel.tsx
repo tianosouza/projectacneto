@@ -345,13 +345,6 @@ export function RegistrationRequestsPanel({
                     </div>
                     {selectedRole === "driver" && (
                       <>
-                        {!request.driver && !request.company_id && (
-                          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
-                            Este cadastro foi criado sem os dados do motorista
-                            persistidos. Solicite um novo cadastro antes de
-                            aprovar.
-                          </div>
-                        )}
                         <div className="grid gap-2 sm:grid-cols-2">
                           <ReadOnlyField
                             label="Vínculo profissional"
@@ -363,21 +356,7 @@ export function RegistrationRequestsPanel({
                             }
                           />
                           {(
-                            [
-                              "full_name",
-                              "phone",
-                              "cpf",
-                              "cnh",
-                              "cnh_category",
-                              "cnh_expires_at",
-                              "vehicle_model",
-                              "vehicle_year",
-                              "plate",
-                              "city",
-                              "state",
-                              "capacity",
-                              "compartments",
-                            ] as const
+                            ["full_name", "phone", "compartments"] as const
                           ).map((field) => (
                             <input
                               key={field}
@@ -391,34 +370,11 @@ export function RegistrationRequestsPanel({
                                   event.target.value,
                                 )
                               }
-                              placeholder={`${fieldLabel[field]}${request.company_id ? "" : " *"}`}
-                              type={
-                                field === "cnh_expires_at"
-                                  ? "date"
-                                  : field === "vehicle_year"
-                                    ? "number"
-                                    : "text"
-                              }
+                              placeholder={`${fieldLabel[field]} *`}
+                              type={field === "phone" ? "tel" : "text"}
                               className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                             />
                           ))}
-                          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-600 sm:col-span-2">
-                            <input
-                              type="checkbox"
-                              checked={
-                                approvalDriverFields[request.id]
-                                  ?.location_sharing_authorized ?? false
-                              }
-                              onChange={(event) =>
-                                onDriverFieldChange(
-                                  request.id,
-                                  "location_sharing_authorized",
-                                  event.target.checked ? "true" : "false",
-                                )
-                              }
-                            />
-                            Autoriza compartilhamento da localização
-                          </label>
                         </div>
                       </>
                     )}

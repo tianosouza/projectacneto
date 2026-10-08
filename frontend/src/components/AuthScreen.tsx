@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import {
   Mail,
   Lock,
@@ -9,48 +9,28 @@ import {
   ArrowRight,
   Building2,
   MapPin,
-  IdCard,
   CalendarDays,
   Truck,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import { apiFetch } from "@/lib/api";
 import { ConfirmationModal } from "@/components/ConfirmationModal";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { RegistrationAttachmentsField } from "@/components/RegistrationAttachmentsField";
 
 export function AuthScreen() {
-  const { signIn, signUp, requestPasswordReset, resetPassword } = useAuth();
-  const [mode, setMode] = useState<"signin" | "forgot" | "reset">("signin");
+  const { signIn, signUp, requestPasswordReset } = useAuth();
+  // "sent": pedido de nova senha registrado para a operação.
+  const [mode, setMode] = useState<"signin" | "forgot" | "sent">("signin");
   const [signupOpen, setSignupOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [birthDate, setBirthDate] = useState("");
-  const [recoveryDocument, setRecoveryDocument] = useState("");
-  const [recoveryBirthDate, setRecoveryBirthDate] = useState("");
-  const [driver, setDriver] = useState({
-    cpf: "",
-    vehicleModel: "",
-    vehicleYear: "",
-    capacity: "",
-    compartments: "",
-    plate: "",
-    cnh: "",
-    cnhCategory: "",
-    cnhExpiresAt: "",
-    city: "",
-    state: "",
-    locationSharingAuthorized: false,
-    employmentType: "autonomous" as "autonomous" | "carrier",
-    carrierId: "",
-  });
-  const [transportCompanies, setTransportCompanies] = useState<
-    Array<{ id: string; name: string; cnpj: string }>
-  >([]);
-  const [resetToken, setResetToken] = useState("");
-  const [resetPasswordValue, setResetPasswordValue] = useState("");
+  const [resetPhone, setResetPhone] = useState("");
+  // Só pedido quando o celular está em mais de uma conta.
+  const [resetNeedsEmail, setResetNeedsEmail] = useState(false);
+  const [compartments, setCompartments] = useState("");
   const [registrationNotes, setRegistrationNotes] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
   const [requestedRole, setRequestedRole] = useState<
@@ -79,17 +59,6 @@ export function AuthScreen() {
     };
   }, [signupOpen]);
 
-  useEffect(() => {
-    if (!signupOpen || requestedRole !== "driver") return;
-    void apiFetch("/api/transport-companies")
-      .then(
-        (response) =>
-          response.json() as Promise<{ companies?: typeof transportCompanies }>,
-      )
-      .then((body) => setTransportCompanies(body.companies ?? []))
-      .catch(() => setTransportCompanies([]));
-  }, [signupOpen, requestedRole]);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -101,10 +70,7 @@ export function AuthScreen() {
         setSubmitting(false);
         return;
       }
-      if (
-        ["driver", "carrier"].includes(requestedRole) &&
-        attachments.length === 0
-      ) {
+      if (requestedRole === "carrier" && attachments.length === 0) {
         setError("Anexe ao menos um documento para continuar.");
         setSubmitting(false);
         return;
@@ -132,18 +98,9 @@ export function AuthScreen() {
         requestedRole === "carrier" || requestedRole === "client"
           ? company
           : undefined,
-        requestedRole === "driver"
-          ? {
-              ...driver,
-              vehicleYear: driver.vehicleYear
-                ? Number(driver.vehicleYear)
-                : undefined,
-            }
-          : undefined,
-        requestedRole === "driver" || requestedRole === "carrier"
-          ? attachments
-          : [],
-        birthDate,
+        requestedRole === "driver" ? { compartments } : undefined,
+        requestedRole === "carrier" ? attachments : [],
+        requestedRole === "driver" ? undefined : birthDate,
       );
       if (result.pending) {
         setSignupOpen(false);
@@ -157,37 +114,14 @@ export function AuthScreen() {
 
     if (mode === "forgot") {
       const result = await requestPasswordReset(
-        email,
-        recoveryDocument,
-        recoveryBirthDate,
+        resetPhone,
+        resetNeedsEmail ? email : undefined,
       );
-      if (result.error || !result.resetToken)
-        setError(result.error ?? "Não foi possível validar os dados.");
-      else {
-        setResetToken(result.resetToken);
-        setMode("reset");
-        setError(null);
-      }
-      setSubmitting(false);
-      return;
-    }
-
-    if (mode === "reset") {
-      if (resetPasswordValue.length < 6) {
-        setError("A nova senha deve ter no mínimo 6 caracteres.");
-        setSubmitting(false);
-        return;
-      }
-      const result = await resetPassword(resetToken, resetPasswordValue);
+      if (result.needsEmail) setResetNeedsEmail(true);
       if (result.error) setError(result.error);
       else {
-        setMode("signin");
-        setPassword("");
-        setResetPasswordValue("");
-        setResetToken("");
-        setRecoveryDocument("");
-        setRecoveryBirthDate("");
-        setError("Senha redefinida. Faça login com a nova senha.");
+        setMode("sent");
+        setError(null);
       }
       setSubmitting(false);
       return;
@@ -279,7 +213,7 @@ export function AuthScreen() {
                   ? "Bem-vindo de volta"
                   : mode === "forgot"
                     ? "Recuperar senha"
-                    : "Definir nova senha"}
+                    : "Pedido enviado"}
               </h2>
               <ThemeToggle />
             </div>
@@ -287,93 +221,75 @@ export function AuthScreen() {
               {mode === "signin"
                 ? "Acesse o Next Driver com seus dados."
                 : mode === "forgot"
-                  ? "Confirme seu e-mail, o número do documento (CPF do motorista ou CNPJ da empresa) e a data de nascimento cadastrados."
-                  : "Dados confirmados. Defina uma nova senha para sua conta."}
+                  ? "Informe o celular cadastrado. Um administrador vai redefinir sua senha e enviá-la pelo WhatsApp."
+                  : "Aguarde: um administrador vai redefinir sua senha e enviar a senha temporária pelo WhatsApp do celular cadastrado. Ao entrar com ela, você criará uma nova senha."}
             </p>
 
-            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-              {mode !== "reset" && (
-                <InputField
-                  icon={Mail}
-                  type="email"
-                  placeholder="E-mail"
-                  value={email}
-                  onChange={setEmail}
-                  required
-                />
-              )}
-              {mode === "forgot" && (
-                <>
+            {mode !== "sent" && (
+              <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+                {(mode === "signin" ||
+                  (mode === "forgot" && resetNeedsEmail)) && (
                   <InputField
-                    icon={IdCard}
-                    type="text"
-                    placeholder="CPF (motorista) ou CNPJ (empresa)"
-                    value={recoveryDocument}
-                    onChange={setRecoveryDocument}
+                    icon={Mail}
+                    type="email"
+                    placeholder="E-mail"
+                    value={email}
+                    onChange={setEmail}
                     required
                   />
-                  <DateField
-                    label="Data de nascimento"
-                    value={recoveryBirthDate}
-                    onChange={setRecoveryBirthDate}
-                    required
-                  />
-                </>
-              )}
-              {mode === "signin" && (
-                <div className="relative">
+                )}
+                {mode === "forgot" && (
                   <InputField
-                    icon={Lock}
-                    type={showPassword ? "text" : "password"}
-                    placeholder="Senha"
-                    value={password}
-                    onChange={setPassword}
+                    icon={Phone}
+                    type="tel"
+                    placeholder="Celular com DDD"
+                    value={resetPhone}
+                    onChange={setResetPhone}
                     required
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    aria-label={
-                      showPassword ? "Ocultar senha" : "Mostrar senha"
-                    }
-                  >
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-              )}
-              {mode === "reset" && (
-                <InputField
-                  icon={Lock}
-                  type="password"
-                  placeholder="Nova senha"
-                  value={resetPasswordValue}
-                  onChange={setResetPasswordValue}
-                  required
-                />
-              )}
+                )}
+                {mode === "signin" && (
+                  <div className="relative">
+                    <InputField
+                      icon={Lock}
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Senha"
+                      value={password}
+                      onChange={setPassword}
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      aria-label={
+                        showPassword ? "Ocultar senha" : "Mostrar senha"
+                      }
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                )}
+                {error && (
+                  <div className="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                    {error}
+                  </div>
+                )}
 
-              {error && (
-                <div className="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                  {error}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={submitting}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0e4db7] py-3.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/20 transition hover:bg-[#0a3a90] disabled:opacity-60"
-              >
-                {submitting
-                  ? "Aguarde..."
-                  : mode === "signin"
-                    ? "Entrar no portal"
-                    : mode === "forgot"
-                      ? "Validar dados"
-                      : "Redefinir senha"}
-                {!submitting && <ArrowRight size={16} />}
-              </button>
-            </form>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0e4db7] py-3.5 text-sm font-semibold text-white shadow-lg shadow-blue-900/20 transition hover:bg-[#0a3a90] disabled:opacity-60"
+                >
+                  {submitting
+                    ? "Aguarde..."
+                    : mode === "signin"
+                      ? "Entrar no portal"
+                      : "Pedir nova senha"}
+                  {!submitting && <ArrowRight size={16} />}
+                </button>
+              </form>
+            )}
             {mode === "signin" && (
               <>
                 <button
@@ -398,12 +314,13 @@ export function AuthScreen() {
                 </button>
               </>
             )}
-            {(mode === "forgot" || mode === "reset") && (
+            {(mode === "forgot" || mode === "sent") && (
               <button
                 type="button"
                 onClick={() => {
                   setMode("signin");
                   setError(null);
+                  setResetNeedsEmail(false);
                 }}
                 className="mt-4 w-full text-sm font-semibold text-slate-500 hover:text-slate-700"
               >
@@ -491,12 +408,14 @@ export function AuthScreen() {
                   onChange={setEmail}
                   required
                 />
-                <DateField
-                  label="Data de nascimento *"
-                  value={birthDate}
-                  onChange={setBirthDate}
-                  required
-                />
+                {requestedRole !== "driver" && (
+                  <DateField
+                    label="Data de nascimento *"
+                    value={birthDate}
+                    onChange={setBirthDate}
+                    required
+                  />
+                )}
                 <InputField
                   icon={Lock}
                   type="password"
@@ -506,227 +425,15 @@ export function AuthScreen() {
                   required
                 />
               </div>
-              {requestedRole === "driver" && (
-                <div className="grid gap-2 rounded-xl border border-dashed border-blue-200 bg-white/70 p-3 sm:grid-cols-2">
-                  <label className="flex flex-col gap-1 text-xs font-semibold text-blue-900">
-                    Vínculo profissional *
-                    <select
-                      value={driver.employmentType}
-                      onChange={(event) =>
-                        setDriver((current) => ({
-                          ...current,
-                          employmentType: event.target.value as
-                            | "autonomous"
-                            | "carrier",
-                          carrierId:
-                            event.target.value === "autonomous"
-                              ? ""
-                              : current.carrierId,
-                        }))
-                      }
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                    >
-                      <option value="autonomous">Autônomo</option>
-                      <option value="carrier">
-                        Motorista de transportadora
-                      </option>
-                    </select>
-                  </label>
-                  {driver.employmentType === "carrier" && (
-                    <label className="flex flex-col gap-1 text-xs font-semibold text-blue-900">
-                      Transportadora *
-                      <select
-                        value={driver.carrierId}
-                        onChange={(event) =>
-                          setDriver((current) => ({
-                            ...current,
-                            carrierId: event.target.value,
-                          }))
-                        }
-                        required
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      >
-                        <option value="">Selecione a transportadora</option>
-                        {transportCompanies.map((company) => (
-                          <option key={company.id} value={company.id}>
-                            {company.name} · {company.cnpj}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                </div>
-              )}
               {requestedRole === "driver" ? (
-                <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
-                  <p className="text-sm font-semibold text-blue-900">
-                    Dados do motorista
-                  </p>
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    <InputField
-                      icon={IdCard}
-                      type="text"
-                      placeholder="CPF *"
-                      value={driver.cpf}
-                      onChange={(value) =>
-                        setDriver((current) => ({ ...current, cpf: value }))
-                      }
-                      required
-                    />
-                    <InputField
-                      icon={IdCard}
-                      type="text"
-                      placeholder="CNH *"
-                      value={driver.cnh}
-                      onChange={(value) =>
-                        setDriver((current) => ({ ...current, cnh: value }))
-                      }
-                      required
-                    />
-                    <InputField
-                      icon={IdCard}
-                      type="text"
-                      placeholder="Categoria da CNH *"
-                      value={driver.cnhCategory}
-                      onChange={(value) =>
-                        setDriver((current) => ({
-                          ...current,
-                          cnhCategory: value.toUpperCase(),
-                        }))
-                      }
-                      required
-                    />
-                    <label className="flex flex-col gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600">
-                      <span>Validade da CNH *</span>
-                      <span className="flex items-center gap-2 text-sm font-normal text-slate-500">
-                        <CalendarDays
-                          size={18}
-                          className="shrink-0 text-slate-400"
-                        />
-                        <input
-                          type="date"
-                          value={driver.cnhExpiresAt}
-                          onChange={(event) =>
-                            setDriver((current) => ({
-                              ...current,
-                              cnhExpiresAt: event.target.value,
-                            }))
-                          }
-                          required
-                          className="min-w-0 flex-1 bg-transparent outline-none"
-                        />
-                      </span>
-                    </label>
-                    <InputField
-                      icon={MapPin}
-                      type="text"
-                      placeholder="Cidade *"
-                      value={driver.city}
-                      onChange={(value) =>
-                        setDriver((current) => ({ ...current, city: value }))
-                      }
-                      required
-                    />
-                    <InputField
-                      icon={MapPin}
-                      type="text"
-                      placeholder="UF *"
-                      value={driver.state}
-                      onChange={(value) =>
-                        setDriver((current) => ({
-                          ...current,
-                          state: value.toUpperCase(),
-                        }))
-                      }
-                      required
-                    />
-                  </div>
-                  <div className="rounded-xl border border-dashed border-blue-200 bg-white/70 p-3">
-                    <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-blue-800">
-                      <Truck size={15} /> Veículo próprio (obrigatório)
-                    </p>
-                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                      <InputField
-                        icon={Truck}
-                        type="text"
-                        placeholder="Tipo / modelo *"
-                        value={driver.vehicleModel}
-                        onChange={(value) =>
-                          setDriver((current) => ({
-                            ...current,
-                            vehicleModel: value,
-                          }))
-                        }
-                        required
-                      />
-                      <InputField
-                        icon={Truck}
-                        type="text"
-                        placeholder="Ano *"
-                        value={driver.vehicleYear}
-                        onChange={(value) =>
-                          setDriver((current) => ({
-                            ...current,
-                            vehicleYear: value.replace(/\D/g, "").slice(0, 4),
-                          }))
-                        }
-                        required
-                      />
-                      <InputField
-                        icon={Truck}
-                        type="text"
-                        placeholder="Placa *"
-                        value={driver.plate}
-                        onChange={(value) =>
-                          setDriver((current) => ({
-                            ...current,
-                            plate: value.toUpperCase(),
-                          }))
-                        }
-                        required
-                      />
-                      <InputField
-                        icon={Truck}
-                        type="text"
-                        placeholder="Capacidade *"
-                        value={driver.capacity}
-                        onChange={(value) =>
-                          setDriver((current) => ({
-                            ...current,
-                            capacity: value,
-                          }))
-                        }
-                        required
-                      />
-                      <InputField
-                        icon={Truck}
-                        type="text"
-                        placeholder="Compartimentação *"
-                        value={driver.compartments}
-                        onChange={(value) =>
-                          setDriver((current) => ({
-                            ...current,
-                            compartments: value,
-                          }))
-                        }
-                        required
-                      />
-                    </div>
-                  </div>
-                  <label className="flex items-center gap-2 text-xs text-blue-900">
-                    <input
-                      type="checkbox"
-                      checked={driver.locationSharingAuthorized}
-                      onChange={(event) =>
-                        setDriver((current) => ({
-                          ...current,
-                          locationSharingAuthorized: event.target.checked,
-                        }))
-                      }
-                    />{" "}
-                    Autorizo o compartilhamento da minha localização.
-                  </label>
-                </div>
+                <InputField
+                  icon={Truck}
+                  type="text"
+                  placeholder="Compartimentação *"
+                  value={compartments}
+                  onChange={setCompartments}
+                  required
+                />
               ) : (
                 <div className="space-y-3 rounded-xl border border-amber-100 bg-amber-50 p-4">
                   <p className="text-sm font-semibold text-amber-900">
@@ -781,7 +488,7 @@ export function AuthScreen() {
                   />
                 </div>
               )}
-              {requestedRole !== "client" && (
+              {requestedRole === "carrier" && (
                 <RegistrationAttachmentsField
                   attachments={attachments}
                   onChange={setAttachments}
@@ -854,8 +561,8 @@ export function InitialPasswordScreen() {
           Defina sua nova senha
         </h1>
         <p className="mt-2 text-sm text-slate-500">
-          Use a senha inicial recebida do administrador apenas no primeiro
-          acesso.
+          Você entrou com uma senha temporária enviada pela operação. Crie
+          agora a sua nova senha para continuar.
         </p>
         <div className="mt-6 space-y-4">
           <InputField
